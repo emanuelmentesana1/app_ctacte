@@ -1,4 +1,4 @@
-import { sb } from './supabase.js';
+import { hasSupabase, sb } from './supabase.js';
 
 /**
  * "Saldos de clientes" — Cuenta Corriente en modo SÓLO CONSULTA DE DEUDA (29/09/2026).
@@ -68,13 +68,20 @@ export async function esSoloSaldos(
     consulta: ConsultaModulos = consultaSupabase,
 ): Promise<boolean | null> {
     if (!user?.sub) return false;
-    const propio = await consulta.propio(user.sub);
-    if (propio.error) return null;
-    if (propio.habilitado != null) return propio.habilitado;
-    if (!user.rol) return false;
-    const porRol = await consulta.porRol(user.rol);
-    if (porRol.error) return null;
-    return !!porRol.tiene;
+    // 🔴 Lo agarró el smoke de Docker: sin Supabase, sb() TIRA, y un await que tira dentro de un
+    // middleware de Express 4 deja el pedido colgado sin respuesta. Una excepción es "no se pudo
+    // preguntar": null, igual que un error de la base.
+    try {
+        const propio = await consulta.propio(user.sub);
+        if (propio.error) return null;
+        if (propio.habilitado != null) return propio.habilitado;
+        if (!user.rol) return false;
+        const porRol = await consulta.porRol(user.rol);
+        if (porRol.error) return null;
+        return !!porRol.tiene;
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -87,6 +94,9 @@ const memoria = new Map<string, { valor: boolean; vence: number }>();
 
 export async function esSoloSaldosConMemoria(user: { sub?: string; rol?: string } | undefined | null): Promise<boolean | null> {
     if (!user?.sub) return false;
+    // Sin Supabase no existe el sistema de módulos del panel (dev, imagen de prueba): nadie está
+    // en sólo saldos y la app se comporta como antes. No es "no se pudo preguntar": no hay a quién.
+    if (!hasSupabase()) return false;
     const clave = `${user.sub}|${user.rol ?? ''}`;
     const hit = memoria.get(clave);
     if (hit && hit.vence > Date.now()) return hit.valor;

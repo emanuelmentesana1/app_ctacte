@@ -62,6 +62,16 @@ describe('esSoloSaldos — misma regla que el panel: la excepción por persona m
         expect(await esSoloSaldos({ sub: 'x', rol: 'administrativo' }, base(null, false, true))).toBe(null);
     });
 
+    // 🔴 Lo agarró el smoke de Docker: sin Supabase, sb() TIRA. Un await que tira dentro de un
+    // middleware de Express 4 deja el pedido colgado. Tiene que volver null, no explotar.
+    it('si la consulta tira una excepción devuelve null, no la propaga', async () => {
+        const rota: ConsultaModulos = {
+            propio: async () => { throw new Error('supabase no configurado'); },
+            porRol: async () => { throw new Error('supabase no configurado'); },
+        };
+        expect(await esSoloSaldos({ sub: 'x', rol: 'administrativo' }, rota)).toBe(null);
+    });
+
     it('sin usuario no es sólo saldos (esa puerta la cierra el login, no esto)', async () => {
         expect(await esSoloSaldos(undefined, base(true, true))).toBe(false);
     });
