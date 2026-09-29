@@ -437,7 +437,9 @@ const requireAuth = (req: express.Request, res: express.Response, next: express.
     const auth = req.headers.authorization;
     // Un JWT válido (login v2) también sirve acá: el shell nuevo consume
     // /api/data y los overrides legacy con authHeaders().
-    if (auth?.startsWith('Bearer ') && verifyJwt(auth.slice(7))) { next(); return; }
+    // 🔴 29/09/2026: miraba SOLO la cabecera. Quien venía del panel (cookie) pasaba /api/me,
+    // entraba, y el 401 de /api/data lo devolvía al login. Ahora mira las dos vías, como requireJwt.
+    if (usuarioDeLaSesion(req)) { next(); return; }
     // Sin APP_PASSWORD el flujo legacy queda DESHABILITADO. Antes esto era
     // next() a secas: con la env var sin setear, el dashboard con los saldos
     // de todos los clientes quedaba abierto a internet sin login.
