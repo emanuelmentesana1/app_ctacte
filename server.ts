@@ -37,6 +37,7 @@ import { listClientesLookup } from './server-lib/clientes.js';
 import { historialComprasCliente } from './server-lib/historialCompras.js';
 import { listActivity, createActivity, updateActivity, deleteActivity, listNotificaciones } from './server-lib/activity.js';
 import { registrarVista, resumenVistas } from './server-lib/sectionViews.js';
+import { rutaPermitidaSoloSaldos, esSoloSaldosConMemoria } from './server-lib/soloSaldos.js';
 import {
   isWebPushEnabled, getVapidPublicKeyHandler, subscribePush, unsubscribePush, testPush,
   dispararRecordatoriosPromesa, dispatchPushNow,
@@ -525,7 +526,9 @@ app.post('/api/auth/login-v2', async (req: express.Request, res: express.Respons
             } catch (e) { console.warn('Rehash bcrypt fallo (no bloqueante):', e); }
         }
         const jwt = signJwt(usuarioToJwtPayload(user));
-        res.json({ success: true, jwt, user: { email: user.email, rol: user.rol, cod_vendedor: user.cod_vendedor, vendedor_key: user.vendedor_key, nombre: user.nombre } });
+        // Mismo criterio que /api/me: la pantalla tiene que saber si es "Saldos de clientes".
+        const solo = await esSoloSaldosConMemoria({ sub: user.id, rol: user.rol });
+        res.json({ success: true, jwt, user: { email: user.email, rol: user.rol, cod_vendedor: user.cod_vendedor, vendedor_key: user.vendedor_key, nombre: user.nombre, solo_saldos: solo !== false } });
     } catch (err: any) {
         console.error('login-v2 error:', err);
         res.status(500).json({ success: false, error: err?.message ?? 'error' });
@@ -599,6 +602,18 @@ const denyRepartidor = (req: express.Request & { user?: JwtPayload }, res: expre
     }
     next();
 };
+
+// "Saldos de clientes" (29/09/2026): quien tiene ese módulo del panel sólo ve la deuda de los
+// clientes. Lista blanca y regla en server-lib/soloSaldos.ts. Como denyRepartidor, va ANTES de
+// las rutas. 🪤 Dentro de app.use('/api') req.path pierde el prefijo: se mira originalUrl.
+app.use('/api', maybeJwt, async (req: express.Request & { user?: JwtPayload }, res: express.Response, next: express.NextFunction) => {
+    if (!req.user || rutaPermitidaSoloSaldos(req.method, req.originalUrl)) { next(); return; }
+    const solo = await esSoloSaldosConMemoria(req.user);
+    if (solo === false) { next(); return; }
+    if (solo === null) { res.status(503).json({ error: 'No se pudieron verificar los permisos. Reintentá en un momento.' }); return; }
+    res.status(403).json({ error: 'Este usuario sólo puede consultar los saldos de los clientes' });
+});
+
 for (const prefix of [
     '/api/data', '/api/goals', '/api/product-goals', '/api/comisiones', '/api/activity',
     '/api/month-config', '/api/reportes', '/api/cuentas', '/api/sheet-import',
@@ -615,8 +630,11 @@ for (const prefix of [
 // El esquema039–041 debe estar disponible antes de cualquier escritura de reparto.
 app.use(['/api/presupuestos', '/api/facturacion', '/api/hojas-ruta', '/api/retiros', '/api/pedidos'], requireJwt, exigirEsquemaReparto);
 
-app.get('/api/me', requireJwt, (req: express.Request & { user?: JwtPayload }, res: express.Response) => {
-    res.json({ ok: true, user: req.user });
+app.get('/api/me', requireJwt, async (req: express.Request & { user?: JwtPayload }, res: express.Response) => {
+    // `solo_saldos` le dice a la pantalla qué dibujar; el permiso de verdad lo aplica el candado
+    // de arriba. Si la base no contestó (null) se dibuja la versión recortada: es la segura.
+    const solo = await esSoloSaldosConMemoria(req.user);
+    res.json({ ok: true, user: { ...req.user, solo_saldos: solo !== false } });
 });
 
 // ─── Recibos ──────────────────────────────────────────────────────────────────

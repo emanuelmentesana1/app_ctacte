@@ -63,6 +63,7 @@ function App() {
                         cod_vendedor: data.user.cod_vendedor ?? null,
                         vendedor_key: data.user.vendedor_key ?? null,
                         nombre: data.user.nombre ?? null,
+                        solo_saldos: data.user.solo_saldos === true,
                     });
                     setAuthState('authenticated');
                     return;

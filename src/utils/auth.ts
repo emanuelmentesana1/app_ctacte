@@ -6,6 +6,8 @@ export interface AuthUser {
     cod_vendedor: number | null;
     vendedor_key: string | null;
     nombre: string | null;
+    /** Módulo "Saldos de clientes" del panel: sólo la deuda de los clientes (server-lib/soloSaldos.ts). */
+    solo_saldos?: boolean;
 }
 
 export const getToken = (): string | null => localStorage.getItem('auth_token');

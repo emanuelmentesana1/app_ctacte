@@ -249,17 +249,24 @@ interface Props {
 
 export const VendorShell = ({ onLogout }: Props) => {
     const user = getUser();
-    const isAdmin = user?.rol === 'admin' || user?.rol === 'gerente';
+    /**
+     * "Saldos de clientes" (29/09/2026, tablet de Casa Central): sólo la deuda de los clientes.
+     * Sin pestañas, sin objetivos ni comisiones, sin cargar pedidos ni pagos. El servidor lo
+     * aplica igual (server-lib/soloSaldos.ts): esto es para no dibujar lo que va a dar 403.
+     */
+    const soloSaldos = user?.solo_saldos === true;
+    const isAdmin = !soloSaldos && (user?.rol === 'admin' || user?.rol === 'gerente');
     // Elegir vendedor es para MIRAR (la oficina entera); `isAdmin` queda para editar.
-    const filtraVendedores = filtraPorVendedor(user?.rol);
+    // Sólo saldos no elige: ve la deuda de todos, y la lista de vendedores sale de /api/goals.
+    const filtraVendedores = !soloSaldos && filtraPorVendedor(user?.rol);
     /**
      * Quién ve "cuánto hay en la calle" (el total de la cuenta corriente de toda la empresa).
      * Mati, 31/08/2026: administración y los socios. Un vendedor sigue viendo sólo lo suyo.
      * El backend lo chequea igual en /api/cartera — esto es para no mostrar una tarjeta que
      * va a dar 403.
      */
-    const veCartera = isAdmin || user?.rol === 'socio';
-    const [tab, setTab] = useState<Tab>('hoy');
+    const veCartera = isAdmin || (!soloSaldos && user?.rol === 'socio');
+    const [tab, setTab] = useState<Tab>(soloSaldos ? 'cobranzas' : 'hoy');
 
     // Telemetría de uso: avisa qué sección se abrió. Sirve para decidir con datos qué sacar
     // del menú — de las secciones de sólo consulta (Hoy, Objetivos, Comisiones, Rebotes) no
@@ -324,6 +331,7 @@ export const VendorShell = ({ onLogout }: Props) => {
 
     // Listener global para 'vs-open-activity' — switchea al tab Actividad y pasa el cliente.
     useEffect(() => {
+        if (soloSaldos) return;
         const h = (e: Event) => {
             const d = (e as CustomEvent).detail;
             setTab('actividad');
@@ -331,7 +339,7 @@ export const VendorShell = ({ onLogout }: Props) => {
         };
         window.addEventListener('vs-open-activity', h);
         return () => window.removeEventListener('vs-open-activity', h);
-    }, []);
+    }, [soloSaldos]);
 
     // Web Push: registramos SW al montar; el permiso lo pedimos en el primer
     // click del usuario en cualquier parte de la app porque los navegadores
@@ -341,6 +349,7 @@ export const VendorShell = ({ onLogout }: Props) => {
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js').catch(() => { });
         }
+        if (soloSaldos) return;
         let asked = false;
         const onFirstClick = () => {
             if (asked) return;
@@ -349,7 +358,7 @@ export const VendorShell = ({ onLogout }: Props) => {
         };
         document.addEventListener('click', onFirstClick, { once: true });
         return () => document.removeEventListener('click', onFirstClick);
-    }, []);
+    }, [soloSaldos]);
 
     const [vendedores, setVendedores] = useState<Array<{ cod_vendedor: number; nombre: string; activo: boolean }>>([]);
     const [showInactivos, setShowInactivos] = useState(false);
@@ -653,13 +662,13 @@ export const VendorShell = ({ onLogout }: Props) => {
                                     showInactivos={showInactivos}
                                     onToggleInactivos={setShowInactivos}
                                 />
-                            ) : 'Panel Vendedor'}
+                            ) : soloSaldos ? 'Saldos de clientes' : 'Panel Vendedor'}
                         </span>
                     </div>
                 </div>
                 <div className="vs-top-actions">
                     <PeriodSelector value={viewPeriod} onChange={setViewPeriod} monthsForward={isAdmin ? 2 : 0} />
-                    <NotificacionesBell />
+                    {!soloSaldos && <NotificacionesBell />}
                     <button className="vs-icon-btn" onClick={() => loadData(true)} title="Refrescar" disabled={loading}>
                         {loading ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
                     </button>
@@ -675,12 +684,14 @@ export const VendorShell = ({ onLogout }: Props) => {
                                         <strong>{user?.nombre ?? user?.email}</strong>
                                         <span>{user?.email}</span>
                                     </div>
+                                    {!soloSaldos && <>
                                     <button onClick={() => { setAvatarMenu(false); setShowCambiarPass(true); }}>
                                         <Lock size={14} /> Cambiar mi contraseña
                                     </button>
                                     <button onClick={() => { setAvatarMenu(false); refrescarCatalogo(); }} disabled={refrescandoCatalogo}>
                                         <RefreshCw size={14} /> Actualizar productos y clientes
                                     </button>
+                                    </>}
                                     {isAdmin && (
                                         <button onClick={() => { setAvatarMenu(false); setShowImportSheet(true); }}>
                                             <FileSpreadsheet size={14} /> Actualizar maestro de clientes
@@ -760,6 +771,7 @@ export const VendorShell = ({ onLogout }: Props) => {
                         buckets={buckets}
                         totalClientes={clientsAgg.length}
                         onUploadPago={() => setShowRecibos(true)}
+                        soloConsulta={soloSaldos}
                         lastRefresh={lastRefresh}
                         loading={loading && invoices.length === 0}
                         pendingOpenClient={pendingCobClient}
@@ -794,6 +806,7 @@ export const VendorShell = ({ onLogout }: Props) => {
             </main>
 
             {/* ═══════════ BOTTOM NAV ═══════════ */}
+            {!soloSaldos && <>
             <nav className="vs-nav" data-tab={tab}>
                 <div className="vs-nav-pill" />
                 <button className={`vs-nav-btn ${tab === 'hoy' ? 'is-active' : ''}`} onClick={() => setTab('hoy')}>
@@ -831,6 +844,7 @@ export const VendorShell = ({ onLogout }: Props) => {
             <button className="vs-fab" onClick={() => setShowRecibos(true)} title="Cargar pago">
                 <Receipt size={22} />
             </button>
+            </>}
 
             {showRecibos && (
                 <RecibosApp onClose={() => setShowRecibos(false)} clients={clientsAgg.map(c => ({ cod: c.cod, name: c.name, localidad: c.localidad }))} />
@@ -1148,13 +1162,15 @@ function WidgetTopDeudores({ clients, onOpenClient, onGoToCobranzas }: { clients
 // ═══════════════════════════════════════════════════════════════════════════
 // COBRANZAS VIEW
 // ═══════════════════════════════════════════════════════════════════════════
-function CobranzasView({ clients, clientesConCredito, search, setSearch, bucket, setBucket, buckets, totalClientes, onUploadPago, lastRefresh, loading, pendingOpenClient, onPendingOpenConsumed, viewPeriod, onPeriodoChange, codsCartera, veCartera, fechaLista, avisoFecha, cargandoFecha }:
+function CobranzasView({ clients, clientesConCredito, search, setSearch, bucket, setBucket, buckets, totalClientes, onUploadPago, soloConsulta, lastRefresh, loading, pendingOpenClient, onPendingOpenConsumed, viewPeriod, onPeriodoChange, codsCartera, veCartera, fechaLista, avisoFecha, cargandoFecha }:
     {
         clients: ClientAgg[]; clientesConCredito: ClientAgg[]; search: string; setSearch: (s: string) => void;
         bucket: 'todos' | 'reciente' | 'medio' | 'vencido'; setBucket: (b: any) => void;
         buckets: { reciente: number; medio: number; vencido: number };
         totalClientes: number;
         onUploadPago: () => void;
+        /** Saldos de clientes: la ficha sin Nota ni Pago. */
+        soloConsulta?: boolean;
         lastRefresh: Date | null;
         loading: boolean;
         pendingOpenClient?: string | null;
@@ -1262,7 +1278,8 @@ function CobranzasView({ clients, clientesConCredito, search, setSearch, bucket,
                     <ClientCard key={c.cod} client={c}
                         isOpen={openClient === c.cod}
                         onToggle={() => setOpenClient(p => p === c.cod ? null : c.cod)}
-                        onUploadPago={onUploadPago} />
+                        onUploadPago={onUploadPago}
+                        soloConsulta={soloConsulta} />
                 ))}
             </div>
 
@@ -1291,7 +1308,7 @@ function CobranzasView({ clients, clientesConCredito, search, setSearch, bucket,
     );
 }
 
-function ClientCard({ client, isOpen, onToggle, onUploadPago }: { client: ClientAgg; isOpen: boolean; onToggle: () => void; onUploadPago: () => void }) {
+function ClientCard({ client, isOpen, onToggle, onUploadPago, soloConsulta }: { client: ClientAgg; isOpen: boolean; onToggle: () => void; onUploadPago: () => void; soloConsulta?: boolean }) {
     const bucket = client.maxDias <= 7 ? 'reciente' : client.maxDias <= 15 ? 'medio' : 'vencido';
     const bucketLabel = `${client.maxDias}d`;
     const db = client.db ?? {};
@@ -1326,7 +1343,7 @@ function ClientCard({ client, isOpen, onToggle, onUploadPago }: { client: Client
                 </div>
             </div>
 
-            <div className="vs-quick-actions">
+            <div className="vs-quick-actions" style={soloConsulta ? { gridTemplateColumns: 'repeat(2, 1fr)' } : undefined}>
                 <a className={`vs-qa call ${tel ? '' : 'is-disabled'}`}
                    href={tel ?? undefined}
                    onClick={e => { e.stopPropagation(); if (!tel) e.preventDefault(); }}
@@ -1341,12 +1358,14 @@ function ClientCard({ client, isOpen, onToggle, onUploadPago }: { client: Client
                        : (waStatus === 'invalid' ? `Teléfono mal cargado en IM: ${waRaw}` : 'Sin teléfono en InfoManager')}>
                     <MessageSquare size={18} /><span>WhatsApp</span>
                 </a>
+                {!soloConsulta && <>
                 <button className="vs-qa note" onClick={e => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('vs-open-activity', { detail: { cod_cliente: client.cod, name: client.name } })); }}>
                     <FileText size={18} /><span>Nota</span>
                 </button>
                 <button className="vs-qa pay" onClick={e => { e.stopPropagation(); onUploadPago(); }}>
                     <Receipt size={18} /><span>Pago</span>
                 </button>
+                </>}
             </div>
             {telStatus === 'invalid' && (
                 <div style={{ fontSize: 11, color: '#b45309', padding: '0 12px 6px', lineHeight: 1.3 }}>
