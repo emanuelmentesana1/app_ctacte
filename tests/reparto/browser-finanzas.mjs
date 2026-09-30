@@ -18,7 +18,7 @@ try {
      version:0,operacion:null,renglones:[{cod_articulo:11,descripcion:'PRODUCTO A',cantidad:10,precio:100,descuento_porc:0}]}));
    await page.locator('.of-tabs button').filter({hasText:'Facturación'}).click();
    await page.locator('.fc-facturados summary').click();
-   await page.getByRole('button',{name:'Corregir',exact:true}).click();
+   await page.getByRole('button',{name:'Editar',exact:true}).click();
    await page.locator('.cf-tabla').waitFor();
    assert(await page.locator('.cf-modal').getByText(/50424/).count()>0,'No abre la factura correcta');
    // 🔑 Mati (22/09/2026): "en la parte de emisión de la NC estaría bueno que aparezcan los
@@ -66,7 +66,9 @@ try {
      renglones:[{cod_articulo:11,descripcion:'PRODUCTO A',cantidad:10,precio:100,descuento_porc:0},{cod_articulo:22,descripcion:'PRODUCTO B',cantidad:4,precio:50,descuento_porc:0}]}));
    await page.locator('.of-tabs button').filter({hasText:'Facturación'}).click();
    await page.locator('.fc-facturados summary').click();
-   await page.getByRole('button',{name:'Corregir',exact:true}).click();
+   await page.getByRole('button',{name:'Editar',exact:true}).click();
+   // 🔑 Desde el 30/09/2026 el modal abre en "Editar factura"; las notas son la otra solapa.
+   await page.getByRole('button',{name:'Con notas (NC/ND)',exact:true}).click();
    await page.locator('.cf-tabla').waitFor();
    const cantidades=async()=>Promise.all([0,1].map(i=>page.locator('.cf-tabla tbody tr').nth(i).locator('input').nth(0).inputValue()));
    await page.getByRole('button',{name:'Devolver todo',exact:true}).click();
@@ -109,7 +111,9 @@ try {
    await page.route('**/api/facturacion/corregir',r=>{previews++;return reply(r,{ok:true,version:0,nc:[{cod_articulo:11,cantidad:1,precio:100}],nd:[{cod_articulo:22,cantidad:1,precio:100}],total_nc:100,total_nd:100,diferencia:0});});
    await page.locator('.of-tabs button').filter({hasText:'Facturación'}).click();
    await page.locator('.fc-facturados summary').click();
-   await page.getByRole('button',{name:'Corregir',exact:true}).click();
+   await page.getByRole('button',{name:'Editar',exact:true}).click();
+   // 🔑 Desde el 30/09/2026 el modal abre en "Editar factura"; las notas son la otra solapa.
+   await page.getByRole('button',{name:'Con notas (NC/ND)',exact:true}).click();
    await page.locator('.cf-tabla').waitFor();
    await page.locator('.cf-tabla tbody tr').nth(0).locator('input').nth(0).fill('9');
    await page.locator('.cf-tabla tbody tr').nth(1).locator('input').nth(0).fill('11');
@@ -127,7 +131,7 @@ try {
    await page.route('**/api/facturacion/corregir/501',r=>reply(r,{factura:{id:'501',numero:501,letra:'B',cliente_nombre:'CLIENTE ALFA',fecha:'2026-09-10'},version:3,operacion:null,renglones:[{cod_articulo:11,descripcion:'PRODUCTO A',cantidad:10,precio:100,descuento_porc:0}]}));
    await page.locator('.of-tabs button').filter({hasText:'Facturación'}).click();
    await page.locator('.fc-facturados summary').click();
-   await page.getByRole('button',{name:'Corregir',exact:true}).click();
+   await page.getByRole('button',{name:'Editar',exact:true}).click();
    await page.locator('.cf-tabla').waitFor();
    await page.getByRole('button',{name:'Ajuste financiero',exact:true}).click();
    await page.getByPlaceholder('0,00',{exact:true}).fill('100');

@@ -74,10 +74,20 @@ export function CorregirFacturaModal(
    * de cambio, o sea que no necesariamente tiene que dar de baja algún producto"*. Es otra cosa
    * que corregir renglones, así que es otra pantalla y no un caso raro de la misma.
    */
-  const [modo, setModo] = useState<'productos' | 'financiera'>('productos');
+  /**
+   * 🔑 'editar' es el modo por defecto desde el 30/09/2026. Mati, por Jorgelina: *"InfoManager es
+   * más fácil ya que sólo edita la factura y listo... no podemos hacer que se pueda modificar la
+   * factura y no tener que emitir tantos comprobantes?"*. La misma grilla, pero al guardar la app
+   * rehace factura y remito (editarFactura.ts) en vez de emitir notas.
+   */
+  const [modo, setModo] = useState<'editar' | 'productos' | 'financiera'>('editar');
   const [finTipo, setFinTipo] = useState<'NC' | 'ND'>('NC');
   const [finImporte, setFinImporte] = useState('');
   const [finMotivo, setFinMotivo] = useState('');
+  /** "Editar factura": cómo quedaría, por qué no se puede, y cómo terminó (o dónde quedó). */
+  const [vistaEdicion, setVistaEdicion] = useState<any>(null);
+  const [avisoEdicion, setAvisoEdicion] = useState<string | null>(null);
+  const [resultadoEdicion, setResultadoEdicion] = useState<any>(null);
   const [version, setVersion] = useState<number | null>(null);
   const [bloqueoProductos, setBloqueoProductos] = useState<string | null>(null);
   const [pendiente, setPendiente] = useState<any>(null);
@@ -138,7 +148,7 @@ export function CorregirFacturaModal(
           const borrador = JSON.parse(sessionStorage.getItem(claveBorrador) ?? 'null');
           if (borrador && Array.isArray(borrador.filas) && Array.isArray(borrador.originales) && !op && !local) {
             setFilas(borrador.filas); setOriginales(borrador.originales); setVersion(borrador.version);
-            setMotivo(borrador.motivo ?? ''); setModo(borrador.modo ?? 'productos');
+            setMotivo(borrador.motivo ?? ''); setModo(borrador.modo ?? 'editar');
             setFinTipo(borrador.finTipo ?? 'NC'); setFinImporte(borrador.finImporte ?? ''); setFinMotivo(borrador.finMotivo ?? '');
             setBorradorDesactualizado(borrador.version !== d.version);
           }
@@ -202,7 +212,7 @@ export function CorregirFacturaModal(
    */
   useEffect(() => {
     setVista(null);
-    if (!hayCambios || faltanPrecios || pendiente || bloqueoProductos || borradorDesactualizado) return;
+    if (modo !== 'productos' || !hayCambios || faltanPrecios || pendiente || bloqueoProductos || borradorDesactualizado) return;
     let vivo = true; const controller = new AbortController();
     const t = setTimeout(async () => {
       try {
@@ -215,7 +225,33 @@ export function CorregirFacturaModal(
       } catch { if (vivo) setVista(null); }
     }, 350);   // sin esto sale una consulta por tecla mientras se escribe un precio
     return () => { vivo = false; controller.abort(); clearTimeout(t); };
-  }, [filas, hayCambios, faltanPrecios, idFactura, version, pendiente, bloqueoProductos, borradorDesactualizado]);
+  }, [modo, filas, hayCambios, faltanPrecios, idFactura, version, pendiente, bloqueoProductos, borradorDesactualizado]);
+
+  /**
+   * La vista previa de "Editar factura", del servidor: el mismo cálculo que después ejecuta. SIN
+   * cambios también se pide, porque si el remito no dice lo mismo que la factura (lo que deja
+   * editarla en la pantalla de IM) se rehace él solo, sin tocar la factura.
+   */
+  useEffect(() => {
+    setVistaEdicion(null); setAvisoEdicion(null);
+    if (modo !== 'editar' || cargando || !factura || faltanPrecios || pendiente || borradorDesactualizado || resultadoEdicion) return;
+    let vivo = true; const controller = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch('/api/facturacion/editar', {
+          method: 'POST', signal: controller.signal, headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ im_factura_id: idFactura, ...(hayCambios ? { renglones: filas } : {}) }),
+        });
+        const d = await r.json().catch(() => null);
+        if (!vivo) return;
+        if (r.ok && d?.previsualizacion) setVistaEdicion(d.previsualizacion);
+        // Quedó una edición a mitad de camino: se muestra para retomarla, no se arranca otra.
+        else if (r.ok && d?.abierta) setResultadoEdicion(d.abierta);
+        else setAvisoEdicion(d?.error ?? 'No pude calcular cómo quedaría.');
+      } catch { if (vivo) setAvisoEdicion(null); }
+    }, 350);
+    return () => { vivo = false; controller.abort(); clearTimeout(t); };
+  }, [modo, cargando, factura, filas, hayCambios, faltanPrecios, idFactura, pendiente, borradorDesactualizado, resultadoEdicion]);
 
   // Buscar un producto para agregar. Reusa el buscador del catálogo que ya usa el vendedor.
   useEffect(() => {
@@ -339,6 +375,41 @@ export function CorregirFacturaModal(
     }
   }
 
+  /** Guarda la edición, o la retoma donde quedó (el servidor sabe en qué paso está). */
+  async function guardarEdicion() {
+    if (envioEnCurso.current || (!vistaEdicion && !resultadoEdicion)) return;
+    if (vistaEdicion) {
+      const v = vistaEdicion;
+      const texto = v.rehace_factura
+        ? `Se anula la ${v.factura.tipo ?? 'factura'} ${v.factura.numero ?? ''} y sale una nueva por ${money(v.factura.total_nuevo)}, con la misma fecha.\nEl remito ${v.remito.numero ?? ''} se rehace igual a ella.`
+        : `El remito ${v.remito.numero ?? ''} se rehace igual a la factura. La factura no se toca.`;
+      if (!confirm(`${texto}\n¿Seguimos?`)) return;
+    }
+    if (!operacionGlobal.comenzar()) return;
+    envioEnCurso.current = true; setEmitiendo(true); setError(null);
+    try {
+      const r = await fetch('/api/facturacion/editar', {
+        method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ im_factura_id: idFactura, confirmar: true, motivo, ...(hayCambios && !resultadoEdicion ? { renglones: filas } : {}) }),
+      });
+      const d = await r.json().catch(() => null);
+      if (!d) throw new Error('Se perdió la respuesta. Volvé a abrir la factura: la edición quedó anotada y se retoma desde ahí.');
+      if (d.estado) {
+        setResultadoEdicion(d);
+        if (d.ok) { try { sessionStorage.removeItem(claveBorrador); } catch { /* Sin persistencia local. */ } borradorCargado.current = false; }
+        onListo();
+      } else if (d.abierta) {
+        setResultadoEdicion({ ...d.abierta, error: d.error ?? d.abierta.error });
+      } else {
+        setError(d.error ?? 'No se pudo editar la factura.');
+      }
+    } catch (e: any) {
+      setError(e?.message ?? 'Error de conexión');
+    } finally {
+      envioEnCurso.current = false; setEmitiendo(false); operacionGlobal.terminar();
+    }
+  }
+
   async function emitirFinanciera() {
     const importe = nun(finImporte);
     if (!(importe > 0) || !finMotivo.trim() || pendiente) return;
@@ -359,7 +430,7 @@ export function CorregirFacturaModal(
       <div className="cf-modal">
         <header className="cf-header">
           <h3>
-            Corregir factura {factura?.letra ?? ''} {factura?.numero ?? ''}
+            {modo === 'editar' ? 'Editar' : 'Corregir'} factura {factura?.letra ?? ''} {factura?.numero ?? ''}
             {factura?.cliente_nombre && <small> · {factura.cliente_nombre}</small>}
           </h3>
           <button onClick={cerrar} disabled={emitiendo} aria-label="Cerrar corrección"><X size={18} /></button>
@@ -394,8 +465,34 @@ export function CorregirFacturaModal(
             </span>
           </div>
         )}
-        {bloqueoProductos && !resultado && <div className="cf-error">{bloqueoProductos}</div>}
-        {resultado ? (
+        {bloqueoProductos && !resultado && modo === 'productos' && <div className="cf-error">{bloqueoProductos}</div>}
+        {resultadoEdicion ? (
+          <div className="cf-listo">
+            {resultadoEdicion.ok ? <>
+              {resultadoEdicion.factura_nueva && (
+                <p className="cf-ok"><CheckCircle2 size={16} /> <span>Salió la <b>{resultadoEdicion.factura_nueva.tipo} {resultadoEdicion.factura_nueva.numero}</b>. La {resultadoEdicion.factura_vieja?.tipo ?? 'factura'} {resultadoEdicion.factura_vieja?.numero} quedó anulada.</span></p>
+              )}
+              {/* El texto va en un <span>: `.cf-ok` es flex y, suelto, cada pedazo quedaba en su propia columna. */}
+              <p className="cf-ok"><CheckCircle2 size={16} /> <span>Salió el remito <b>{resultadoEdicion.remito_nuevo?.numero}</b>. El {resultadoEdicion.remito_viejo?.numero} quedó anulado y lo que no salió volvió al stock.</span></p>
+              {resultadoEdicion.hoja && <p className="cf-ok"><CheckCircle2 size={16} /> <span>La hoja de ruta {resultadoEdicion.hoja} ya lleva el remito nuevo.</span></p>}
+              <button className="cf-btn primario" onClick={cerrar}>Listo</button>
+            </> : <>
+              <p className="cf-mal"><AlertTriangle size={16} /> <span>{resultadoEdicion.error ?? 'La edición quedó a mitad de camino.'}</span></p>
+              {resultadoEdicion.factura_nueva && <p className="cf-nota">La factura nueva ({resultadoEdicion.factura_nueva.numero}) ya salió: al retomar no se vuelve a emitir.</p>}
+              <div className="cf-pie">
+                <button className="cf-btn" onClick={cerrar} disabled={emitiendo}>Cerrar</button>
+                {/* 'cancelada': el primer paso falló sin cambiar nada, así que se vuelve a la grilla. */}
+                {resultadoEdicion.estado === 'cancelada' ? (
+                  <button className="cf-btn primario" onClick={() => setResultadoEdicion(null)}>Volver a la factura</button>
+                ) : resultadoEdicion.estado !== 'incierto' && (
+                  <button className="cf-btn primario" onClick={() => void guardarEdicion()} disabled={emitiendo}>
+                    {emitiendo ? <><Loader2 size={15} className="spin" /> Retomando…</> : 'Retomar donde quedó'}
+                  </button>
+                )}
+              </div>
+            </>}
+          </div>
+        ) : resultado ? (
           <div className="cf-listo">
             {resultado.emitidos.map((e, i) => (
               <p key={i} className="cf-ok"><CheckCircle2 size={16} /> Salió la <b>{e.tipo} {e.numero}</b> por {money(e.total)}.</p>
@@ -408,8 +505,11 @@ export function CorregirFacturaModal(
         ) : !cargando && factura && (
           <fieldset disabled={emitiendo || !!pendiente || borradorDesactualizado} style={{ border: 0, padding: 0, minWidth: 0 }}>
             <div className="cf-solapas">
+              <button className={modo === 'editar' ? 'activa' : ''} onClick={() => setModo('editar')}>
+                Editar factura
+              </button>
               <button className={modo === 'productos' ? 'activa' : ''} onClick={() => setModo('productos')}>
-                Corregir productos
+                Con notas (NC/ND)
               </button>
               <button className={modo === 'financiera' ? 'activa' : ''} onClick={() => setModo('financiera')}>
                 Ajuste financiero
@@ -464,11 +564,18 @@ export function CorregirFacturaModal(
               </div>
             ) : (
             <>
-            {/* 🪤 La factura no se modifica. Que se lea antes de tocar nada. */}
-            <p className="cf-nota">
-              La factura {factura.numero} no se toca: es un comprobante fiscal. Dejá los renglones
-              como tendrían que haber quedado y abajo vas a ver qué notas salen.
-            </p>
+            {modo === 'editar' ? (
+              <p className="cf-nota">
+                Dejá la factura como tiene que quedar y guardá. Si cambia, la app la reemplaza por una
+                nueva con la misma fecha, y el remito, el stock y la hoja de ruta se acomodan solos.
+              </p>
+            ) : (
+              /* 🪤 La factura no se modifica. Que se lea antes de tocar nada. */
+              <p className="cf-nota">
+                La factura {factura.numero} no se toca: es un comprobante fiscal. Dejá los renglones
+                como tendrían que haber quedado y abajo vas a ver qué notas salen.
+              </p>
+            )}
 
             {/* 🔴 Plata de la factura que la nota no puede tocar: IM exige código de artículo. */}
             {!!sinArticulo.length && (
@@ -484,12 +591,12 @@ export function CorregirFacturaModal(
               </div>
             )}
 
-            <div className="cf-herramientas">
+            {modo === 'productos' && <div className="cf-herramientas">
               <button type="button" className="cf-btn cf-devolver-todo" onClick={devolverTodo} disabled={!filas.length}
                       title={todoEnCero ? 'Volver a las cantidades de la factura' : 'Pone todas las cantidades en 0: la nota acredita la factura entera y la mercadería vuelve al stock'}>
                 {todoEnCero ? 'Restaurar cantidades' : 'Devolver todo'}
               </button>
-            </div>
+            </div>}
             <div className="cf-tabla-scroll"><table className="cf-tabla">
               <thead>
                 <tr>
@@ -600,7 +707,33 @@ export function CorregirFacturaModal(
               )}
             </div>
 
-            {vista && (
+            {modo === 'editar' && vistaEdicion && (
+              <div className="cf-resumen">
+                <h4>Cómo queda</h4>
+                {vistaEdicion.rehace_factura ? (
+                  <p>La {vistaEdicion.factura.tipo ?? 'factura'} {vistaEdicion.factura.numero} ({money(vistaEdicion.factura.total_actual)}) se anula y sale una nueva por <b>{money(vistaEdicion.factura.total_nuevo)}</b>, con la misma fecha.</p>
+                ) : (
+                  <p>La factura queda como está. El remito {vistaEdicion.remito.numero} ({money(vistaEdicion.remito.total_actual)}) <b>no coincide con ella</b> y se rehace por {money(vistaEdicion.remito.total_nuevo)}.</p>
+                )}
+                {vistaEdicion.rehace_factura && <p>El remito {vistaEdicion.remito.numero} se rehace igual a la factura nueva{vistaEdicion.hoja ? ` y se cambia en la hoja ${vistaEdicion.hoja}` : ''}.</p>}
+                {!vistaEdicion.rehace_factura && vistaEdicion.hoja && <p>En la hoja {vistaEdicion.hoja} se cambia por el remito nuevo.</p>}
+                {!!vistaEdicion.vuelve.length && (
+                  <div className="cf-comp nc"><b>Vuelve al stock</b>
+                    <ul>{vistaEdicion.vuelve.map((x: any) => <li key={x.cod_articulo}>{x.cantidad} × {x.descripcion} <span className="cf-cod">Cód. {x.cod_articulo}</span></li>)}</ul>
+                  </div>
+                )}
+                {!!vistaEdicion.sale.length && (
+                  <div className="cf-comp nd"><b>Sale del stock</b>
+                    <ul>{vistaEdicion.sale.map((x: any) => <li key={x.cod_articulo}>{x.cantidad} × {x.descripcion} <span className="cf-cod">Cód. {x.cod_articulo}</span></li>)}</ul>
+                  </div>
+                )}
+              </div>
+            )}
+            {modo === 'editar' && avisoEdicion && !vistaEdicion && (
+              <p className={hayCambios ? 'cf-error' : 'cf-nota'}>{avisoEdicion}</p>
+            )}
+
+            {modo === 'productos' && vista && (
               <div className="cf-resumen">
                 <h4>Lo que se va a emitir</h4>
                 {!!vista.nc.length && (
@@ -638,10 +771,18 @@ export function CorregirFacturaModal(
                      onChange={e => setMotivo(e.target.value)}
                      placeholder="Motivo (va en las observaciones): lista mal cargada, no lo quiso…" />
               <button className="cf-btn" onClick={cancelar} disabled={emitiendo}>Cancelar</button>
-              <button className="cf-btn primario" onClick={() => void emitir()}
-                      disabled={!vista || faltanPrecios || emitiendo || !!bloqueoProductos || (!vista.nc.length && !vista.nd.length)}>
-                {emitiendo ? <><Loader2 size={15} className="spin" /> Emitiendo…</> : 'Emitir la corrección'}
-              </button>
+              {modo === 'editar' ? (
+                <button className="cf-btn primario" onClick={() => void guardarEdicion()}
+                        disabled={!vistaEdicion || faltanPrecios || emitiendo}>
+                  {emitiendo ? <><Loader2 size={15} className="spin" /> Guardando…</>
+                    : vistaEdicion && !vistaEdicion.rehace_factura ? 'Rehacer el remito' : 'Guardar cambios'}
+                </button>
+              ) : (
+                <button className="cf-btn primario" onClick={() => void emitir()}
+                        disabled={!vista || faltanPrecios || emitiendo || !!bloqueoProductos || (!vista.nc.length && !vista.nd.length)}>
+                  {emitiendo ? <><Loader2 size={15} className="spin" /> Emitiendo…</> : 'Emitir la corrección'}
+                </button>
+              )}
             </div>
             </>
             )}

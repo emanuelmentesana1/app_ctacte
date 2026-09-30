@@ -28,7 +28,9 @@ try {
         if(b.emitir){sent=b;return reply(r,{ok:true,emitidos:[{tipo:'ND B',numero:1,total:nuevo.precio}],fallados:[]});}
         return reply(r,{ok:true,nc:[],nd:nuevo?[nuevo]:[],total_nc:0,total_nd:nuevo?.precio??0,diferencia:nuevo?.precio??0});
       });
-      await page.getByRole('button',{name:'Corregir',exact:true}).click();
+      await page.getByRole('button',{name:'Editar',exact:true}).click();
+      // 🔑 Desde el 30/09/2026 el modal abre en "Editar factura"; las notas son la otra solapa.
+      await page.getByRole('button',{name:'Con notas (NC/ND)',exact:true}).click();
       await page.locator('.cf-agregar input').fill('NUEVO');
       await page.locator('.cf-candidatos button').click();
       const lista=page.getByRole('combobox',{name:'Lista de PRODUCTO NUEVO'});
@@ -63,7 +65,7 @@ try {
         instruccion:'InfoManager rechazó la nota por un conflicto de numeración en el punto 777. Verificá la nota en InfoManager y conciliá su comprobante con esta operación.'};
       await page.route('**/api/facturacion/corregir/501',r=>reply(r,{factura:{id:'501',numero:501,letra:'B',cliente_nombre:'CLIENTE ALFA',fecha:'2026-09-10'},version:3,operacion,renglones:[{cod_articulo:11,descripcion:'PRODUCTO A',cantidad:10,precio:100,iva_por:21}]}));
       await page.route('**/api/facturacion/corregir',r=>{if(r.request().postDataJSON()?.emitir)envios++;return reply(r,{ok:false});});
-      await page.getByRole('button',{name:'Corregir',exact:true}).click();
+      await page.getByRole('button',{name:'Editar',exact:true}).click();
       await page.locator('.cf-error').filter({hasText:operacion.instruccion}).waitFor();
       assert(await page.locator('.cf-error').count()===1,'Duplica carteles para el mismo rechazo');
       assert(await page.getByRole('button',{name:/Retomar/}).count()===0,'Ofrece repetir una colisión conocida');
@@ -113,8 +115,9 @@ try {
     try {
       await invoice(page);
       await page.route('**/api/facturacion/corregir',r=>reply(r,{ok:true,version:3,nc:[{cod_articulo:11,cantidad:1,precio:100}],nd:[],total_nc:100,total_nd:0,diferencia:-100}));
-      const trigger=page.getByRole('button',{name:'Corregir',exact:true});
+      const trigger=page.getByRole('button',{name:'Editar',exact:true});
       await trigger.click();
+      await page.getByRole('button',{name:'Con notas (NC/ND)',exact:true}).click();
       await page.locator('.cf-tabla tbody tr').first().locator('input').first().fill('9');
       for(let i=0;i<18;i++) {
         await page.keyboard.press('Tab');
@@ -141,8 +144,9 @@ try {
     try {
       await invoice(page);
       await page.route('**/api/facturacion/corregir',r=>reply(r,{ok:true,version:3,nc:[{cod_articulo:11,cantidad:1,precio:100}],nd:[],total_nc:100,total_nd:0,diferencia:-100}));
-      const trigger=page.getByRole('button',{name:'Corregir',exact:true});
+      const trigger=page.getByRole('button',{name:'Editar',exact:true});
       await trigger.click();
+      await page.getByRole('button',{name:'Con notas (NC/ND)',exact:true}).click();
       const cantidad=page.locator('.cf-tabla tbody tr').first().locator('input').first();
       await cantidad.fill('9');
       await page.locator('.cf-pie').getByRole('button',{name:'Cancelar',exact:true}).click();
@@ -161,7 +165,9 @@ try {
       await invoice(page);
       let enviado=null;
       await page.route('**/api/facturacion/corregir',r=>{enviado=r.request().postDataJSON();return reply(r,{ok:true,version:3,nc:[{cod_articulo:11,cantidad:10,precio:10}],nd:[],total_nc:100,total_nd:0,diferencia:-100});});
-      await page.getByRole('button',{name:'Corregir',exact:true}).click();
+      await page.getByRole('button',{name:'Editar',exact:true}).click();
+      // 🔑 Desde el 30/09/2026 el modal abre en "Editar factura"; las notas son la otra solapa.
+      await page.getByRole('button',{name:'Con notas (NC/ND)',exact:true}).click();
       const desc=page.getByLabel('Descuento de PRODUCTO A',{exact:true});
       await desc.waitFor();
       assert(await desc.isEditable(),'El descuento sigue bloqueado');

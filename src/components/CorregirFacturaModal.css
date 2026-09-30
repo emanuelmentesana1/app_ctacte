@@ -107,6 +107,8 @@
 
 .cf-listo { padding: 0.6rem 0; }
 .cf-ok, .cf-mal { display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; margin: 0.4rem 0; }
+/* Con el texto en dos renglones el ícono no se achica. */
+.cf-ok > svg, .cf-mal > svg { flex-shrink: 0; }
 .cf-ok { color: #06652F; }
 .cf-mal { color: #8a1c12; }
 

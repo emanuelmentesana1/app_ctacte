@@ -310,6 +310,23 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
         finally { setDestrabando(null); }
     };
 
+    /**
+     * Retoma una edición de factura que quedó a mitad de camino (editarFactura.ts). Recarga SIEMPRE:
+     * si el servidor la canceló porque no se había cambiado nada, la fila vuelve a la normalidad.
+     */
+    const retomarEdicion = async (p: Fila) => {
+        setDestrabando(p.im_comprobante_id); setError(null);
+        try {
+            const r = await fetch('/api/facturacion/editar', {
+                method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ im_factura_id: p.im_factura_id, confirmar: true }),
+            });
+            const d = await r.json().catch(() => null);
+            if (!r.ok || !d?.ok) setError(d?.error ?? `No se pudo retomar (HTTP ${r.status})`);
+        } catch (e: any) { setError(e?.message ?? 'Error de conexión'); }
+        finally { setDestrabando(null); void cargar(true); }
+    };
+
     const registrarRemitoHecho = (p: Fila) => {
         const escrito = window.prompt(
             `¿Con qué número salió el remito de la factura ${p.im_factura_numero} de ${p.cliente_nombre}?\n\n`
@@ -630,12 +647,26 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                                                 </button>
                                             );
                                         })()}
-                                        {p.im_factura_id && (
+                                        {/* 🔑 "Editar" desde el 30/09/2026: rehace factura y remito (editarFactura.ts), y con
+                                            el remito distinto de la factura (FA ≠ RE) lo arregla sin tocar la factura. Las
+                                            notas siguen en una solapa del mismo modal. */}
+                                        {p.im_factura_id && p.estado_emision !== 'editando' && (
                                             <button className="fc-imprimir fc-corregir"
-                                                    title="Corregir con notas de crédito y débito: sacar, agregar o cambiar el precio de un producto"
+                                                    title="Editar la factura: sacar, agregar o cambiar productos. También arregla el remito si no coincide con la factura."
                                                     onClick={() => { olvidarComparados(); setCorrigiendo(String(p.im_factura_id)); }}>
-                                                <Pencil size={14} /> Corregir
+                                                <Pencil size={14} /> Editar
                                             </button>
+                                        )}
+                                        {/* 🔴 Una edición que quedó a mitad de camino (IM rechazó o no contestó en un paso):
+                                            el servidor sabe en cuál quedó y sigue desde ahí, sin volver a emitir lo que ya salió. */}
+                                        {p.im_factura_id && p.estado_emision === 'editando' && (
+                                            <>
+                                                <span className="fc-chip grave" title="La factura se estaba editando y quedó a mitad de camino.">Edición sin terminar</span>
+                                                <button className="fc-imprimir fc-corregir" disabled={destrabando === p.im_comprobante_id}
+                                                        onClick={() => void retomarEdicion(p)}>
+                                                    {destrabando === p.im_comprobante_id ? <Loader2 size={14} className="spin" /> : <Pencil size={14} />} Retomar edición
+                                                </button>
+                                            </>
                                         )}
                                         {p.im_factura_id && (
                                             <button className="fc-imprimir fc-fecha"

@@ -62,6 +62,7 @@ import { tableroFacturacion, previsualizarFacturacion, facturarSeleccion, libera
 import { descartarRemitoSobrante, habilitarFacturaPendiente, anularFacturaEmitida } from './server-lib/conciliarEmision.js';
 // Corregir una factura ya emitida, con notas de crédito y de débito.
 import { verFacturaParaCorregir, corregirFactura, historialCorrecciones, notaFinanciera, moverFechaFactura, cancelarCorreccion } from './server-lib/correccionFactura.js';
+import { editarFactura } from './server-lib/editarFactura.js';
 import { compararFacturaConRemito } from './server-lib/compararComprobantes.js';
 import { marcarRetiro, quitarRetiro, marcarRetirado, listarRetiros, resumenRetiros } from './server-lib/retirosSucursal.js';
 import { listarChoferes, liquidacionMensual } from './server-lib/liquidacionChoferes.js';
@@ -735,6 +736,8 @@ app.get('/api/facturacion/corregir/:idFactura', requireJwt, (req: any, res) => v
 app.get('/api/facturacion/comparar/:imComprobanteId', requireJwt, (req: any, res) => compararFacturaConRemito(req, res));
 app.get('/api/facturacion/corregir/:idFactura/historial', requireJwt, (req: any, res) => historialCorrecciones(req, res));
 app.post('/api/facturacion/corregir', requireJwt, (req: any, res) => corregirFactura(req, res));
+// Editar = anular y volver a emitir factura y remito, con el stock y la hoja al día (edicionFactura.ts).
+app.post('/api/facturacion/editar', requireJwt, (req: any, res) => editarFactura(req, res));
 // Una NC/ND que no saca mercadería: diferencia de cambio, intereses, bonificación.
 app.delete('/api/facturacion/operaciones/:id', requireJwt, (req: any, res) => cancelarCorreccion(req, res));
 app.post('/api/facturacion/nota-financiera', requireJwt, (req: any, res) => notaFinanciera(req, res));
