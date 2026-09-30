@@ -1,4 +1,5 @@
 import { fetchVentas, fetchVentasItems, type VentaRaw, type VentaItem } from './infomanager.js';
+import { mesEnCursoArgentina } from '../src/utils/hoyArgentina.js';
 
 /**
  * Cache RAM del dataset CRUDO de ventas por mes calendario completo.
@@ -61,6 +62,18 @@ function ymdMonthEnd(year: number, month: number): string {
 }
 
 /**
+ * ¿Es el mes que está corriendo? Decide si el cache dura 30 min o 24 h.
+ *
+ * 🪤 En hora de Tucumán, no en UTC: el server corre en UTC y desde las 21:00 del último día el
+ * mes que se está cerrando pasaba a "histórico" — lo facturado esas tres horas no se veía hasta
+ * el día siguiente (30/09/2026).
+ */
+function esMesEnCurso(year: number, month: number): boolean {
+    const hoy = mesEnCursoArgentina();
+    return year === hoy.year && month === hoy.month;
+}
+
+/**
  * Devuelve las ventas crudas del mes (1..últimoDía).
  * - Cache fresco: devuelve cached, no toca IM.
  * - Cache vencido: devuelve stale + refresh background (no espera).
@@ -74,8 +87,7 @@ export async function getMonthlyVentasRaw(
 ): Promise<{ ventas: VentaRaw[]; cached: boolean; cacheAge: number }> {
     const key = makeKey(year, month, opts?.codEmpresa);
     const now = Date.now();
-    const nowD = new Date();
-    const isCurrent = year === nowD.getUTCFullYear() && month === (nowD.getUTCMonth() + 1);
+    const isCurrent = esMesEnCurso(year, month);
     const ttl = isCurrent ? TTL_CURRENT_MS : TTL_HISTORIC_MS;
     const existing = cache.get(key);
     const age = existing ? now - existing.fetchedAt : Infinity;
@@ -123,10 +135,7 @@ async function refreshVentas(
     const hasta = ymdMonthEnd(year, month);
     const t0 = Date.now();
     const ventas = await fetchVentas(desde, hasta, { codEmpresa: opts?.codEmpresa });
-    const isCurrent = (() => {
-        const d = new Date();
-        return year === d.getUTCFullYear() && month === (d.getUTCMonth() + 1);
-    })();
+    const isCurrent = esMesEnCurso(year, month);
     if (!opts?.nocache) {
         cache.set(makeKey(year, month, opts?.codEmpresa), {
             ventas,
@@ -174,8 +183,7 @@ export function peekMonthlyVentas(
         return null;
     }
     const now = Date.now();
-    const nowD = new Date();
-    const isCurrent = year === nowD.getUTCFullYear() && month === (nowD.getUTCMonth() + 1);
+    const isCurrent = esMesEnCurso(year, month);
     const ttl = isCurrent ? TTL_CURRENT_MS : TTL_HISTORIC_MS;
     if (now - existing.fetchedAt >= ttl) ensureInflight();
     return existing.ventas;
@@ -220,8 +228,7 @@ export async function getMonthlyItemsRaw(
 ): Promise<{ items: VentaItem[]; cached: boolean; cacheAge: number }> {
     const key = makeItemsKey(year, month, opts?.codEmpresa);
     const now = Date.now();
-    const nowD = new Date();
-    const isCurrent = year === nowD.getUTCFullYear() && month === (nowD.getUTCMonth() + 1);
+    const isCurrent = esMesEnCurso(year, month);
     const ttl = isCurrent ? TTL_CURRENT_MS : TTL_HISTORIC_MS;
     const existing = itemsCache.get(key);
     const age = existing ? now - existing.fetchedAt : Infinity;
@@ -263,10 +270,7 @@ async function refreshItems(
     const hasta = ymdMonthEnd(year, month);
     const t0 = Date.now();
     const items = await fetchVentasItems(desde, hasta, { codEmpresa: opts?.codEmpresa });
-    const isCurrent = (() => {
-        const d = new Date();
-        return year === d.getUTCFullYear() && month === (d.getUTCMonth() + 1);
-    })();
+    const isCurrent = esMesEnCurso(year, month);
     if (!opts?.nocache) {
         itemsCache.set(makeItemsKey(year, month, opts?.codEmpresa), {
             items,
@@ -305,8 +309,7 @@ export function peekMonthlyItems(
         return null;
     }
     const now = Date.now();
-    const nowD = new Date();
-    const isCurrent = year === nowD.getUTCFullYear() && month === (nowD.getUTCMonth() + 1);
+    const isCurrent = esMesEnCurso(year, month);
     const ttl = isCurrent ? TTL_CURRENT_MS : TTL_HISTORIC_MS;
     if (now - existing.fetchedAt >= ttl) ensureInflight();
     return existing.items;

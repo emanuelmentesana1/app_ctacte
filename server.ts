@@ -1769,7 +1769,9 @@ async function prewarmSnapshotCache() {
 }
 
 async function prewarmSnapshotCacheInner() {
-    const now = new Date();
+    // Corrido 3 h para leer el mes de Tucumán con getUTC*: en UTC puro, desde las 21:00 del último
+    // día el prewarm ya forzaba el mes siguiente y dejaba el que se cierra como histórico.
+    const now = new Date(Date.now() - 3 * 60 * 60 * 1000);
     // 6 meses: trimestre actual + trimestre anterior. Necesitamos los 6
     // calientes para que el endpoint /api/clientes/:cod/historial-compras
     // pueda calcular alertas (cliente sin comprar / producto en abandono) y

@@ -3,6 +3,7 @@ import { sb, TENANT_ID, hasSupabase } from './supabase.js';
 import { fetchVendedores, fetchVentas, fetchClientesIMCached } from './infomanager.js';
 import type { JwtPayload } from './auth.js';
 import { computeVentaNeta, monthKey } from '../src/utils/ventas.js';
+import { hoyArgentina, hoyArgentinaPartes } from '../src/utils/hoyArgentina.js';
 import { getMonthlyVentasRaw, getMonthlyItemsRaw } from './snapshotCache.js';
 import { getCached as getResponseCached, setCached as setResponseCached, invalidateAll as invalidateResponseCache } from './goalsResponseCache.js';
 import {
@@ -109,8 +110,9 @@ export async function buildClientesNuevosConVentas(opts: {
 }
 
 function today(): { year: number; month: number; day: number } {
-  const d = new Date();
-  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+  // 🪤 Hora de Tucumán, no UTC: desde las 21:00 del último día, UTC ya está en el mes siguiente y
+  // el mes que se cierra se trataba como histórico (30/09/2026).
+  return hoyArgentinaPartes();
 }
 
 /**
@@ -775,7 +777,7 @@ export async function debugClienteAvance(req: Request & { user?: JwtPayload }, r
     const lastDay = new Date(year, month, 0).getDate();
     const isCurrentMonth = year === t.year && month === t.month;
     const hasta = isCurrentMonth
-      ? new Date().toISOString().slice(0, 10)
+      ? hoyArgentina()
       : `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
     // Traer todas las ventas del mes (sin filtrar por cod_cliente — InfoManager

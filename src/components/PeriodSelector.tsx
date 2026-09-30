@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Calendar, Check, Clock } from 'lucide-react';
 import './PeriodSelector.css';
+import { hoyArgentinaPartes } from '../utils/hoyArgentina';
 
 export interface ViewPeriod {
     year: number;
@@ -20,10 +21,9 @@ interface Props {
 
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
-function nowYM(): { year: number; month: number; day: number } {
-    const d = new Date();
-    return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
-}
+// 🪤 Hora de Tucumán, no UTC: desde las 21:00 del último día el selector ya ofrecía el mes
+// siguiente como "en curso" (30/09/2026). Ver hoyArgentina.ts.
+const nowYM = hoyArgentinaPartes;
 
 function isCurrent(p: ViewPeriod): boolean {
     const t = nowYM();

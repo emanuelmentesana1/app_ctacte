@@ -1,6 +1,7 @@
 import { fetchVentas, fetchVentasItems } from './infomanager.js';
 import { sb, TENANT_ID, hasSupabase } from './supabase.js';
 import { computeVentaNeta, monthKey } from '../src/utils/ventas.js';
+import { mesEnCursoArgentina } from '../src/utils/hoyArgentina.js';
 import { invalidateByPrefix as invalidateGoalsPrefix } from './goalsResponseCache.js';
 import { invalidateMonth as invalidateSnapshotMonth, invalidateItemsMonth } from './snapshotCache.js';
 import { invalidateAlertasVendedor } from './notificacionesAlertas.js';
@@ -46,10 +47,6 @@ export interface SyncResult {
   hasta?: string;
   label?: string;
   error?: string;
-}
-
-function ymdMonthStart(date = new Date()): string {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-01`;
 }
 
 function ymdMonthEnd(year: number, month: number): string {
@@ -246,16 +243,18 @@ async function syncVentasRango(opts: {
  * refrescar el rango y los días futuros aparecen cuando IM los tiene.
  */
 export async function syncVentasMesActual(opts?: { codEmpresa?: number }): Promise<SyncResult> {
-  const now = new Date();
+  // 🪤 El mes de Tucumán, no el de UTC: desde las 21:00 del último día UTC ya está en el mes
+  // siguiente, y el cierre quedaba sin actualizar hasta el sync diario de la 01:00 (30/09/2026).
+  const { year, month } = mesEnCursoArgentina();
   const r = await syncVentasRango({
-    desde: ymdMonthStart(),
-    hasta: ymdMonthEnd(now.getUTCFullYear(), now.getUTCMonth() + 1),
+    desde: `${year}-${String(month).padStart(2, '0')}-01`,
+    hasta: ymdMonthEnd(year, month),
     codEmpresa: opts?.codEmpresa ?? COD_EMPRESA_DEFAULT,
     label: 'mes-actual',
   });
   // El cron */30 actualiza vendor/client_sales_monthly del mes actual:
   // invalidar caches del mes para que la próxima carga vea el nuevo avance.
-  if (r.ok) invalidateMonthCaches(now.getUTCFullYear(), now.getUTCMonth() + 1, opts?.codEmpresa);
+  if (r.ok) invalidateMonthCaches(year, month, opts?.codEmpresa);
   return r;
 }
 
@@ -281,9 +280,8 @@ export async function syncVentasMes(year: number, month: number, opts?: { codEmp
  */
 export async function syncVentasMeses(n: number, opts?: { codEmpresa?: number }): Promise<SyncResult[]> {
   const results: SyncResult[] = [];
-  const now = new Date();
-  const baseYear = now.getUTCFullYear();
-  const baseMonth = now.getUTCMonth() + 1;
+  // En hora de Tucumán, como el sync del mes actual.
+  const { year: baseYear, month: baseMonth } = mesEnCursoArgentina();
   for (let i = 0; i < n; i++) {
     // i=0 → mes actual; i=1 → mes anterior; etc.
     let m = baseMonth - i;
