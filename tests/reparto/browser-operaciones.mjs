@@ -130,6 +130,49 @@ try {
       assert(await page.locator('.cf-tabla tbody tr').first().locator('input').first().inputValue()==='9','Se perdió el borrador anterior al POST');
     } finally {await ctx.close();}
   });
+  /**
+   * 🔑 30/09/2026, Jo con la FA B 50963 (MEJIAS): *"quiere cancelar unos cambios... pero cada vez que
+   * pone cancelar se vuelven a cambiar los cambios para que ella confirme, y no tenemos forma de volver
+   * atrás"*. El borrador se guardaba y "Cancelar" sólo cerraba. Escape y la X lo siguen conservando
+   * (cierre sin querer, test de arriba); "Cancelar" es la decisión de no hacer nada.
+   */
+  await test('Cancelar descarta el borrador de corrección',async()=>{
+    const {page,ctx}=await setup();
+    try {
+      await invoice(page);
+      await page.route('**/api/facturacion/corregir',r=>reply(r,{ok:true,version:3,nc:[{cod_articulo:11,cantidad:1,precio:100}],nd:[],total_nc:100,total_nd:0,diferencia:-100}));
+      const trigger=page.getByRole('button',{name:'Corregir',exact:true});
+      await trigger.click();
+      const cantidad=page.locator('.cf-tabla tbody tr').first().locator('input').first();
+      await cantidad.fill('9');
+      await page.locator('.cf-pie').getByRole('button',{name:'Cancelar',exact:true}).click();
+      assert(!await page.locator('.cf-modal').isVisible(),'Cancelar no cerró');
+      await trigger.click();
+      await page.locator('.cf-tabla tbody tr').first().waitFor();
+      const valor=await page.locator('.cf-tabla tbody tr').first().locator('input').first().inputValue();
+      assert(valor==='10',`Cancelar no descartó el cambio: la cantidad volvió como ${valor}`);
+    } finally {await ctx.close();}
+  });
+
+  /** 🔑 Mati (30/09/2026): "necesitamos también poder modificar el % de descuento en la factura". */
+  await test('El % de descuento se puede corregir y viaja al cálculo de la nota',async()=>{
+    const {page,ctx}=await setup();
+    try {
+      await invoice(page);
+      let enviado=null;
+      await page.route('**/api/facturacion/corregir',r=>{enviado=r.request().postDataJSON();return reply(r,{ok:true,version:3,nc:[{cod_articulo:11,cantidad:10,precio:10}],nd:[],total_nc:100,total_nd:0,diferencia:-100});});
+      await page.getByRole('button',{name:'Corregir',exact:true}).click();
+      const desc=page.getByLabel('Descuento de PRODUCTO A',{exact:true});
+      await desc.waitFor();
+      assert(await desc.isEditable(),'El descuento sigue bloqueado');
+      await desc.fill('10');
+      for(let i=0;i<60&&!enviado?.renglones;i++)await new Promise(r=>setTimeout(r,25));
+      assert(enviado?.renglones?.[0]?.descuento_porc===10,`No mandó el descuento nuevo: ${JSON.stringify(enviado?.renglones?.[0])}`);
+      assert(await page.locator('.cf-tabla tbody tr').first().evaluate(el=>el.classList.contains('cambiado')),'El renglón con descuento cambiado no se marca');
+      await desc.fill('150');
+      assert(await desc.inputValue()==='100',`Aceptó un descuento fuera de 0-100: ${await desc.inputValue()}`);
+    } finally {await ctx.close();}
+  });
   await test('Mover fecha impide Escape, cierre y edición hasta confirmar respuesta',async()=>{
     const {page,ctx}=await setup();let release=()=>{};
     try {

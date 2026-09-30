@@ -96,6 +96,16 @@ export function CorregirFacturaModal(
   })));
   const claveBorrador = `reparto:${propietarioBorrador}:borrador-correccion:${idFactura}`;
   const clavePendiente = `reparto:${propietarioBorrador}:correccion:${idFactura}`;
+  /**
+   * 🔑 "Cancelar" DESCARTA el borrador; la X y Escape lo conservan (cierre sin querer). Jo, 30/09/2026,
+   * con la FA B 50963: *"cada vez que pone cancelar se vuelven a cambiar los cambios para que ella
+   * confirme, y no tenemos forma de volver atrás"*. Lo pendiente de emitir (`clavePendiente`) no se toca.
+   */
+  const cancelar = () => {
+    if (envioEnCurso.current) return;
+    try { sessionStorage.removeItem(claveBorrador); } catch { /* Sin persistencia local. */ }
+    onCerrar();
+  };
 
   useEffect(() => {
     const impedirSalida = (e: BeforeUnloadEvent) => { if (envioEnCurso.current) { e.preventDefault(); e.returnValue = ''; } };
@@ -225,9 +235,11 @@ export function CorregirFacturaModal(
     return () => { vivo = false; controller.abort(); clearTimeout(t); };
   }, [buscando]);
 
-  const tocar = (i: number, campo: 'cantidad' | 'precio', valor: string) => {
+  const tocar = (i: number, campo: 'cantidad' | 'precio' | 'descuento_porc', valor: string) => {
     setVista(null);
-    setFilas(fs => fs.map((f, j) => j === i ? { ...f, [campo]: nun(valor) } : f));
+    // El descuento es un porcentaje: fuera de 0-100 el servidor rechaza la nota entera.
+    const n = campo === 'descuento_porc' ? Math.min(100, Math.max(0, nun(valor))) : nun(valor);
+    setFilas(fs => fs.map((f, j) => j === i ? { ...f, [campo]: n } : f));
   };
 
   const cambiarLista = (cod: number, lista: number) => {
@@ -416,7 +428,7 @@ export function CorregirFacturaModal(
                   </p>
                 )}
                 <div className="cf-pie">
-                  <button className="cf-btn" onClick={cerrar} disabled={emitiendo}>Cancelar</button>
+                  <button className="cf-btn" onClick={cancelar} disabled={emitiendo}>Cancelar</button>
                   <button className="cf-btn primario" onClick={() => void emitirFinanciera()}
                           disabled={emitiendo || !(nun(finImporte) > 0) || !finMotivo.trim()}>
                     {emitiendo ? <><Loader2 size={15} className="spin" /> Emitiendo…</>
@@ -464,7 +476,8 @@ export function CorregirFacturaModal(
                 {filas.map((f, i) => {
                   const orig = originales.find(o => o.cod_articulo === f.cod_articulo);
                   const cambio = !orig || Math.abs(orig.cantidad - f.cantidad) > 0.0001
-                    || f.precio == null || Math.abs(Number(orig.precio) - f.precio) > 0.00005;
+                    || f.precio == null || Math.abs(Number(orig.precio) - f.precio) > 0.00005
+                    || Math.abs(Number(orig.descuento_porc ?? 0) - Number(f.descuento_porc ?? 0)) > 0.00005;
                   return (
                     <tr key={f.cod_articulo} className={cambio ? 'cambiado' : ''}>
                       <td>{f.descripcion ?? `Artículo ${f.cod_articulo}`}
@@ -494,9 +507,15 @@ export function CorregirFacturaModal(
                           {erroresPrecio[f.cod_articulo] && <button type="button" onClick={() => setIntentoPrecio(n => n + 1)}>Reintentar precio</button>}
                         </div>}
                       </td>
-                      {/* 🪤 De sólo lectura: el descuento es el que trae la factura. Para corregirlo
-                          se toca el precio, que es lo que la oficina ya sabe hacer. */}
-                      <td className="n cf-desc">{f.descuento_porc ? `${f.descuento_porc}%` : '—'}</td>
+                      {/* 🔑 Editable desde el 30/09/2026. Mati: *"necesitamos también poder modificar
+                          el % de descuento en la factura, actualmente está bloqueado"*. El servidor
+                          ya calculaba la nota por la diferencia de neto, y si sólo cambia el descuento
+                          sale FINANCIERA: no mueve stock (ver subtipoNota). */}
+                      <td className="n cf-desc">
+                        <input aria-label={`Descuento de ${f.descripcion}`} inputMode="decimal"
+                               value={String(f.descuento_porc ?? 0)}
+                               onChange={e => tocar(i, 'descuento_porc', e.target.value)} />
+                      </td>
                       <td className="n">{f.precio == null ? '—' : money(importeDe(f))}</td>
                       <td className="n cf-antes">
                         {orig ? money(importeDe(orig)) : <span className="cf-nuevo">nuevo</span>}
@@ -587,7 +606,7 @@ export function CorregirFacturaModal(
               <input aria-label="Motivo de la corrección" className="cf-motivo" value={motivo} maxLength={200}
                      onChange={e => setMotivo(e.target.value)}
                      placeholder="Motivo (va en las observaciones): lista mal cargada, no lo quiso…" />
-              <button className="cf-btn" onClick={cerrar} disabled={emitiendo}>Cancelar</button>
+              <button className="cf-btn" onClick={cancelar} disabled={emitiendo}>Cancelar</button>
               <button className="cf-btn primario" onClick={() => void emitir()}
                       disabled={!vista || faltanPrecios || emitiendo || !!bloqueoProductos || (!vista.nc.length && !vista.nd.length)}>
                 {emitiendo ? <><Loader2 size={15} className="spin" /> Emitiendo…</> : 'Emitir la corrección'}

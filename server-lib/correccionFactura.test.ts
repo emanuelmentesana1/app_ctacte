@@ -224,6 +224,32 @@ describe('el descuento del renglón', () => {
     expect(c.nd[0].descuento_porc).toBe(35);
   });
 
+  /**
+   * 🔑 Mati (30/09/2026): *"necesitamos también poder modificar el % de descuento en la factura,
+   * actualmente está bloqueado"*. Cambiar sólo el descuento es plata, no mercadería: la nota va
+   * por la diferencia de NETO y sin tocar cantidades.
+   */
+  it('🔴 sólo sube el descuento (35% → 40%): NC por la diferencia neta, misma cantidad', () => {
+    const viejo = [{ cod_articulo: 320, cantidad: 4, precio: 22473.6745, descuento_porc: 35 }];
+    const nuevo = [{ cod_articulo: 320, cantidad: 4, precio: 22473.6745, descuento_porc: 40 }];
+    const c = calcularCorreccion(viejo, nuevo);
+    expect(c.nd).toHaveLength(0);
+    expect(c.total_nc).toBeCloseTo(4 * 22473.6745 * 0.05, 2);
+    expect(netoDe(viejo) + c.diferencia).toBeCloseTo(netoDe(nuevo), 2);
+    expect(c.nc.reduce((s, r) => s + Number(r.cantidad), 0)).toBe(4);
+  });
+
+  it('🔴 sólo baja el descuento (35% → 30%): ND por la diferencia neta', () => {
+    const viejo = [{ cod_articulo: 320, cantidad: 4, precio: 22473.6745, descuento_porc: 35 }];
+    const nuevo = [{ cod_articulo: 320, cantidad: 4, precio: 22473.6745, descuento_porc: 30 }];
+    const c = calcularCorreccion(viejo, nuevo);
+    expect(c.nc).toHaveLength(0);
+    expect(c.total_nd).toBeCloseTo(4 * 22473.6745 * 0.05, 2);
+    // 🪤 Hasta UN centavo de redondeo: la factura redondea su importe (58.431,55) y la nota el suyo
+    // (4.494,73); el total "ideal" al 30% es 62.926,29 y la suma da 62.926,28.
+    expect(Math.abs(netoDe(viejo) + c.diferencia - netoDe(nuevo))).toBeLessThanOrEqual(0.011);
+  });
+
   it('🔴 cantidad Y precio con descuento: la suma sigue explicando la diferencia al centavo', () => {
     const viejo = [{ cod_articulo: 330, cantidad: 8, precio: 18387.89527, descuento_porc: 35 }];
     const nuevo = [{ cod_articulo: 330, cantidad: 5, precio: 19000, descuento_porc: 35 }];
