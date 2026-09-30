@@ -15,6 +15,7 @@ import { RecibosApp } from './RecibosApp';
 import { PedidosApp } from './PedidosApp';
 import { leerBorrador } from '../utils/borradorPedido';
 import { montoCorto } from '../utils/montoCorto';
+import { pctParaMostrar } from '../utils/cumplimiento';
 import { ConciliacionApp } from './ConciliacionApp';
 import { CambiarPassword } from './CambiarPassword';
 import { UsuariosAdmin } from './UsuariosAdmin';
@@ -1074,7 +1075,7 @@ function WidgetEquipo({ totales, top3, onGoTo }: { totales: { target: number; av
             <div className="vs-eq-cifra">
                 <strong>{formatMoney(totales.avance)}</strong>
                 <span>de {formatMoney(totales.target)}</span>
-                <b className={atrasado ? 'atras' : ''}>{Math.round(pctPct)}%</b>
+                <b className={atrasado ? 'atras' : ''}>{pctParaMostrar(Math.min(2, pct))}%</b>
             </div>
 
             {/* La barra lleva la marca de por dónde debería ir el mes: un 54% en el día 5 y un
@@ -1097,7 +1098,7 @@ function WidgetEquipo({ totales, top3, onGoTo }: { totales: { target: number; av
             {top3.length > 0 && (
                 <div className="vs-hoy-top3">
                     {top3.map((v, i) => {
-                        const vPct = Math.round(Math.min(200, (v.pct_cumplimiento ?? 0) * 100));
+                        const vPct = pctParaMostrar(Math.min(2, v.pct_cumplimiento ?? 0));
                         const barPct = Math.min(100, (v.pct_cumplimiento ?? 0) * 100);
                         return (
                             <div key={v.cod_vendedor} className="vs-hoy-top3-row">
@@ -2281,7 +2282,6 @@ function RankingEquipo({ items }: { items: any[] }) {
             <div className="vs-ranking-list">
                 {ranked.map((v: any, idx: number) => {
                     const pct = v.pct_cumplimiento ?? 0;
-                    const pctPct = Math.min(200, pct * 100);
                     const barPct = Math.min(100, pct * 100);
                     const colorClass = pct >= 0.9 ? 'ok' : pct >= 0.5 ? 'mid' : 'low';
                     const medal = idx < 3 ? medals[idx] : null;
@@ -2293,7 +2293,8 @@ function RankingEquipo({ items }: { items: any[] }) {
                             <div className="vs-ranking-body">
                                 <div className="vs-ranking-row1">
                                     <strong>{v.nombre}</strong>
-                                    <span className="vs-ranking-pct">{Math.round(pctPct)}%</span>
+                                    {/* Sin llegar al objetivo no dice 100% (Marcelo, 30/09/2026: $174,8M sobre $175M). */}
+                                    <span className="vs-ranking-pct">{pctParaMostrar(Math.min(2, pct))}%</span>
                                 </div>
                                 <div className="vs-ranking-bar">
                                     <div className="vs-ranking-bar-fill" style={{ width: `${barPct}%` }} />
@@ -2736,7 +2737,8 @@ function formatMoney(n: number | null | undefined): string {
 function fmtPct(v: number): string {
     // Piso 0.1: un avance positivo minúsculo (ej 0.04%) no debe mostrarse "0.0%"
     // — contradice que haya avance. Se redondea hacia arriba al primer decimal.
-    return v > 0 && v < 10 ? Math.max(v, 0.1).toFixed(1) : String(Math.round(v));
+    // Del 10% para arriba, sin llegar al 100% no se redondea para arriba: 99,9% no es "100%".
+    return v > 0 && v < 10 ? Math.max(v, 0.1).toFixed(1) : String(pctParaMostrar(v / 100));
 }
 function formatDay(iso: string): string {
     const d = new Date(iso + 'T00:00:00');

@@ -142,6 +142,18 @@ describe('armarHistorico', () => {
         expect(pctParaMostrar(0)).toBe(0);
     });
 
+    /**
+     * 30/09/2026: el mismo 100% apareció en el ranking del mes (Marcelo, $174.838.198 sobre
+     * $175.000.000), así que ahora lo usan todas las pantallas. El piso no puede comerse un
+     * punto por el error de la coma flotante: 0,29 × 100 da 28,999… en JavaScript.
+     */
+    it('el piso no le resta un punto a un porcentaje exacto', () => {
+        expect(pctParaMostrar(174838198 / 175000000)).toBe(99);
+        expect(pctParaMostrar(0.29)).toBe(29);
+        expect(pctParaMostrar(0.57)).toBe(57);
+        expect(pctParaMostrar(29 / 100)).toBe(29);
+    });
+
     it('ordena los vendedores por cumplimiento del año, mejor primero', () => {
         const r = armarHistorico({
             year: 2026,

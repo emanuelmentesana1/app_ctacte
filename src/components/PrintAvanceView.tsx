@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, Printer, Download } from 'lucide-react';
 import type { ViewPeriod } from './PeriodSelector';
 import { generateAvanceReport, type AvanceReportData } from '../utils/pdfAvanceReport';
+import { pctParaMostrar } from '../utils/cumplimiento';
 import './PrintAvanceView.css';
 
 interface Props {
@@ -26,7 +27,7 @@ const formatMoney = (n: number | null | undefined): string => {
 };
 const formatPct = (p: number | null | undefined): string => {
     if (p == null) return '—';
-    return `${Math.round(p * 100)}%`;
+    return `${pctParaMostrar(p)}%`;
 };
 
 export function PrintAvanceView(props: Props) {

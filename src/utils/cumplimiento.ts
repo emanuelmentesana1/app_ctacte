@@ -56,7 +56,8 @@ const CERCA = 0.9;
  * Pasado el objetivo sí se redondea normal: ahí ya cumplió y el decimal no cambia nada.
  */
 export function pctParaMostrar(pct: number): number {
-    return pct < 1 ? Math.floor(pct * 100) : Math.round(pct * 100);
+    // El 1e-9 es por la coma flotante: 0,29 × 100 da 28,999… y el piso lo dejaba en 28.
+    return pct < 1 ? Math.floor(pct * 100 + 1e-9) : Math.round(pct * 100);
 }
 
 function estadoPara(pct: number): EstadoMes {

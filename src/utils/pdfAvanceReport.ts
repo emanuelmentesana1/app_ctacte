@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { pctParaMostrar } from './cumplimiento';
 
 const formatCurrency = (n: number | null | undefined): string => {
     if (n == null) return '—';
@@ -8,7 +9,7 @@ const formatCurrency = (n: number | null | undefined): string => {
 
 const formatPct = (p: number | null | undefined): string => {
     if (p == null) return '—';
-    return `${Math.round(p * 100)}%`;
+    return `${pctParaMostrar(p)}%`;
 };
 
 // Colores Semillero — match con pdfReport.ts (Cobranzas).
