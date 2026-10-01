@@ -240,7 +240,33 @@ export function CorregirFacturaModal(
     // El descuento es un porcentaje: fuera de 0-100 el servidor rechaza la nota entera.
     const n = campo === 'descuento_porc' ? Math.min(100, Math.max(0, nun(valor))) : nun(valor);
     setFilas(fs => fs.map((f, j) => j === i ? { ...f, [campo]: n } : f));
+    return n;
   };
+
+  /**
+   * 🔴 LO QUE SE ESTÁ TIPEANDO SE MUESTRA TAL CUAL. Mati (01/10/2026): *"hay que poner para que la
+   * app se pueda poner decimales en las cantidades"*. El campo mostraba el número ya convertido, y
+   * "9," es 9: la coma desaparecía en el acto y, al seguir tipeando, "9,5" quedaba **95** — una
+   * nota por diez veces la cantidad, sin aviso. IM acepta decimales (el granel va por kilo).
+   *
+   * Mientras el campo tiene el foco se ve el texto; al salir, el número. Si lo tipeado no es lo que
+   * queda guardado (un descuento de 150 se guarda 100), se muestra lo guardado en el acto.
+   */
+  const [tecleado, setTecleado] = useState<Record<string, string>>({});
+  const escribir = (i: number, cod: number, campo: 'cantidad' | 'precio' | 'descuento_porc', valor: string) => {
+    // Sólo dígitos y un separador: una letra antes dejaba la cantidad en cero.
+    if (!/^\d*[.,]?\d*$/.test(valor)) return;
+    const n = tocar(i, campo, valor);
+    const leido = Number(valor.replace(',', '.'));
+    // Vacío o sólo el separador ("," para escribir ",5") todavía no es un número: se espera.
+    const aMedias = valor === '' || /^[.,]$/.test(valor);
+    setTecleado(t => {
+      const c = { ...t };
+      if (aMedias || leido === n) c[`${cod}:${campo}`] = valor; else delete c[`${cod}:${campo}`];
+      return c;
+    });
+  };
+  const soltar = (cod: number, campo: string) => setTecleado(t => { const c = { ...t }; delete c[`${cod}:${campo}`]; return c; });
 
   const cambiarLista = (cod: number, lista: number) => {
     setVista(null);
@@ -497,12 +523,16 @@ export function CorregirFacturaModal(
                         </select></div>
                       </td>
                       <td className="n">
-                        <input aria-label={`Cantidad de ${f.descripcion}`} inputMode="decimal" value={String(f.cantidad)}
-                               onChange={e => tocar(i, 'cantidad', e.target.value)} />
+                        <input aria-label={`Cantidad de ${f.descripcion}`} inputMode="decimal"
+                               value={tecleado[`${f.cod_articulo}:cantidad`] ?? String(f.cantidad)}
+                               onChange={e => escribir(i, f.cod_articulo, 'cantidad', e.target.value)}
+                               onBlur={() => soltar(f.cod_articulo, 'cantidad')} />
                       </td>
                       <td className="n">
-                        <input aria-label={`Precio de ${f.descripcion}`} inputMode="decimal" value={f.precio == null ? '' : String(f.precio)} disabled={f.precio == null}
-                               onChange={e => tocar(i, 'precio', e.target.value)} />
+                        <input aria-label={`Precio de ${f.descripcion}`} inputMode="decimal" disabled={f.precio == null}
+                               value={f.precio == null ? '' : tecleado[`${f.cod_articulo}:precio`] ?? String(f.precio)}
+                               onChange={e => escribir(i, f.cod_articulo, 'precio', e.target.value)}
+                               onBlur={() => soltar(f.cod_articulo, 'precio')} />
                         {f.precio == null && <div className="cf-precio-pendiente">{erroresPrecio[f.cod_articulo] ?? 'Consultando precio…'}
                           {erroresPrecio[f.cod_articulo] && <button type="button" onClick={() => setIntentoPrecio(n => n + 1)}>Reintentar precio</button>}
                         </div>}
@@ -513,8 +543,9 @@ export function CorregirFacturaModal(
                           sale FINANCIERA: no mueve stock (ver subtipoNota). */}
                       <td className="n cf-desc">
                         <input aria-label={`Descuento de ${f.descripcion}`} inputMode="decimal"
-                               value={String(f.descuento_porc ?? 0)}
-                               onChange={e => tocar(i, 'descuento_porc', e.target.value)} />
+                               value={tecleado[`${f.cod_articulo}:descuento_porc`] ?? String(f.descuento_porc ?? 0)}
+                               onChange={e => escribir(i, f.cod_articulo, 'descuento_porc', e.target.value)}
+                               onBlur={() => soltar(f.cod_articulo, 'descuento_porc')} />
                       </td>
                       <td className="n">{f.precio == null ? '—' : money(importeDe(f))}</td>
                       <td className="n cf-antes">

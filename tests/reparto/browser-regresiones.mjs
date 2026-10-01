@@ -324,6 +324,66 @@ try {
       await page.screenshot({path:`${out}/hoja-con-pendientes.png`,fullPage:true});
     } finally { await ctx.close(); }
   });
+  /**
+   * 🔴 01/10/2026 — Mati: *"hay que poner para que la app se pueda poner decimales en las
+   * cantidades al facturar, parece que no está contemplado"*. InfoManager las acepta (0,5 kg de
+   * almendras, 6,8 de banana en septiembre) y el servidor ya calcula la nota con 4 decimales, pero
+   * en Corregir factura cada tecla se convertía a número: "9," quedaba "9" y la coma no se podía
+   * escribir nunca. Se tipea tecla por tecla, como en el teclado del celular.
+   */
+  await test('Corregir factura acepta cantidad, precio y descuento con decimales (coma o punto)', async()=>{
+    const {page,ctx}=await setup();
+    try {
+      await page.route('**/api/facturacion?**',r=>reply(r,{pendientes:[],facturados:[{...rows[0],im_factura_id:'501',im_factura_numero:501,im_factura_tipo:'FA B',notas:[]}],totales:{pendientes:0,facturados:1}}));
+      await page.route('**/api/facturacion/corregir/501',r=>reply(r,{factura:{id:'501',numero:501,letra:'B',cliente_nombre:'CLIENTE ALFA',fecha:'2026-09-10'},version:3,operacion:null,bloqueo_productos:null,renglones:[{cod_articulo:11,descripcion:'PRODUCTO A',cantidad:10,precio:100,descuento_porc:0,iva_por:21}]}));
+      let enviado=null;
+      await page.route('**/api/facturacion/corregir',r=>{enviado=r.request().postDataJSON();return reply(r,{ok:true,version:3,nc:[],nd:[],total_nc:0,total_nd:0,diferencia:0});});
+      await page.locator('.of-tabs').getByRole('button',{name:'Facturación',exact:true}).click();
+      await page.locator('.fc-facturados summary').click();
+      // "Corregir" hoy; "Editar" con la solapa de notas aparte cuando salga la edición de facturas.
+      await page.getByRole('button',{name:/^(Corregir|Editar)$/}).first().click();
+      const solapaNotas=page.getByRole('button',{name:'Con notas (NC/ND)',exact:true});
+      if(await solapaNotas.isVisible().catch(()=>false)) await solapaNotas.click();
+      const tipear=async(etiqueta,texto)=>{
+        const campo=page.getByLabel(etiqueta,{exact:true});
+        await campo.waitFor();
+        await campo.click(); await campo.press('Control+a'); await campo.press('Backspace');
+        await campo.pressSequentially(texto);
+        return campo;
+      };
+      const ultimo=async(campo,valor)=>{
+        for(let i=0;i<80&&enviado?.renglones?.[0]?.[campo]!==valor;i++)await new Promise(r=>setTimeout(r,25));
+        return enviado?.renglones?.[0]?.[campo];
+      };
+
+      const cant=await tipear('Cantidad de PRODUCTO A','9,5');
+      assert(await cant.inputValue()==='9,5',`La coma no se pudo escribir en la cantidad: quedó "${await cant.inputValue()}"`);
+      const q=await ultimo('cantidad',9.5);
+      assert(q===9.5,`No mandó la cantidad con decimales: ${JSON.stringify(q)}`);
+      // Una letra no es una cantidad: se ignora, no deja el renglón en cero.
+      await cant.pressSequentially('x');
+      assert(await cant.inputValue()==='9,5',`Una letra cambió la cantidad: "${await cant.inputValue()}"`);
+      await cant.press('Tab');
+      assert(['9.5','9,5'].includes(await cant.inputValue()),`Al salir del campo la cantidad quedó "${await cant.inputValue()}"`);
+
+      // Empezar por la coma, como se dice: ",5" es medio kilo.
+      const media=await tipear('Cantidad de PRODUCTO A',',5');
+      assert(await media.inputValue()===',5',`No se pudo empezar por la coma: quedó "${await media.inputValue()}"`);
+      assert(await ultimo('cantidad',0.5)===0.5,'No mandó 0,5');
+
+      const precio=await tipear('Precio de PRODUCTO A','99.75');
+      assert(await precio.inputValue()==='99.75',`El punto no se pudo escribir en el precio: quedó "${await precio.inputValue()}"`);
+      assert(await ultimo('precio',99.75)===99.75,'No mandó el precio con decimales');
+
+      const desc=await tipear('Descuento de PRODUCTO A','12,5');
+      assert(await desc.inputValue()==='12,5',`La coma no se pudo escribir en el descuento: quedó "${await desc.inputValue()}"`);
+      assert(await ultimo('descuento_porc',12.5)===12.5,'No mandó el descuento con decimales');
+      // El tope de 0-100 se sigue viendo al instante.
+      await desc.fill('150');
+      assert(await desc.inputValue()==='100',`Aceptó un descuento fuera de 0-100: ${await desc.inputValue()}`);
+      await page.screenshot({path:`${out}/correccion-decimales.png`,fullPage:true});
+    } finally { await ctx.close(); }
+  });
 } finally {
   await fs.writeFile(`${out}/browser-regresiones.json`,JSON.stringify(results,null,2));
   await browser.close();
