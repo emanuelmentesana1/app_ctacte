@@ -40,16 +40,19 @@ vi.mock('./supabase.js', () => ({ sb: m.sbMock, TENANT_ID: 'test-tenant', hasSup
 
 vi.mock('./versionPresupuesto.js', async original => ({ ...(await original<any>()), exigirHuella: vi.fn() }));
 
-const { editarPresupuesto, firmaDelSurtido, emparejarParaPut } = await import('./editarPresupuesto.js');
+const { editarPresupuesto, firmaDelSurtido, emparejarParaPut, comprobanteParaImprimir } = await import('./editarPresupuesto.js');
 
 let tablas: Record<string, any> = {};
 let escrituras: Array<{ tabla: string; op: string; valor: any }> = [];
 /** Si está seteado, toda ESCRITURA contesta este error (Supabase no tira: devuelve `{error}`). */
 let errorEnEscritura: { message: string } | null = null;
+/** Las funciones de la base que se llamaron, y lo que contesta cada una si no es lo de siempre. */
+let rpcs: Array<{ nombre: string; args: any }> = [];
+let respuestasRpc: Record<string, any> = {};
 
 function fakeSb() {
   m.sbMock.mockImplementation(() => ({
-    rpc: vi.fn(async () => ({ data: true, error: null })),
+    rpc: vi.fn(async (nombre: string, args: any) => { rpcs.push({ nombre, args }); return respuestasRpc[nombre] ?? { data: true, error: null }; }),
     from: (t: string) => {
       const res = tablas[t] ?? { data: null, error: null };
       const escribio = () => (errorEnEscritura ? { data: null, error: errorEnEscritura } : res);
@@ -92,6 +95,8 @@ beforeEach(() => {
   tablas = { presupuestos_facturados: { data: null, error: null }, presupuestos_revision: { data: null, error: null } };
   escrituras = [];
   errorEnEscritura = null;
+  rpcs = [];
+  respuestasRpc = {};
   vi.clearAllMocks();
   fakeSb();
   m.cabeceraComprobante.mockResolvedValue(CAB_OK);
@@ -326,21 +331,22 @@ describe('el costo de distribución', () => {
   });
 
   /**
-   * 🔴 Los renglones sin artículo que YA están en InfoManager son notas que escribió la oficina
-   * desde su propio sistema ("QUEBRADO GRUESO PENDIENTE"). Rehacer el presupuesto las borraría y
-   * la API no las puede volver a cargar, así que se frena y se dice por qué.
+   * 🔴 Los renglones sin artículo CON importe que ya están en InfoManager (un flete escrito a mano)
+   * no se pueden volver a cargar por la API: rehacer el presupuesto los borraría, así que se frena
+   * y se dice por qué. Los que van en $0 son otra cosa: ver "lo que viaja sin cobrarse".
    */
-  it('🔴 si el presupuesto tiene notas sin código, no se rehace: se perderían', async () => {
+  it('🔴 si el presupuesto tiene renglones sin código CON importe, no se rehace: se perderían', async () => {
     m.getItemsComprobante.mockResolvedValue([
       { id: 101, cod_articulo: 1, cantidad: 10, cod_lista_precios: 13, descuento_porc: 0, precio: 100, precio_orig: 100, iva_por: 0, detalle: 'ALPISTE X 30 KG' },
-      { id: 103, cod_articulo: 0, cantidad: 1, cod_lista_precios: 13, descuento_porc: 0, precio: 0, precio_orig: 0, iva_por: 0, detalle: 'QUEBRADO GRUESO PENDIENTE' },
+      { id: 103, cod_articulo: 0, cantidad: 1, cod_lista_precios: 13, descuento_porc: 0, precio: 15000, precio_orig: 15000, iva_por: 0, detalle: 'FLETE A MANO' },
     ]);
     const r = await llamar({ items: [
       { cod_articulo: 1, cantidad: 10, cod_lista_precios: 13, descuento_porc: 0, precio: 100 },
       { cod_articulo: 13819, cantidad: 1, cod_lista_precios: 13, descuento_porc: 0, precio: 15000 },
     ] });
     expect(r.status).toBe(409);
-    expect(r.body.error).toMatch(/QUEBRADO GRUESO PENDIENTE/);
+    expect(r.body.error).toMatch(/FLETE A MANO/);
+    expect(r.body.error).toMatch(/costo de distribución/i);
     expect(m.crearPresupuesto).not.toHaveBeenCalled();
     expect(m.anularComprobante).not.toHaveBeenCalled();
   });
@@ -356,6 +362,144 @@ describe('el costo de distribución', () => {
     expect(r.status).toBe(200);
     expect(r.body.modo).toBe('cantidades');
     expect(m.actualizarPresupuestoCantidades).toHaveBeenCalledWith('58727292', [{ id: 101, cantidad: 25 }]);
+  });
+});
+
+describe('lo que viaja sin cobrarse (mercadería ya facturada, 01/10/2026)', () => {
+  /**
+   * 🔴 CARDENES, PR 59080. Jo quiso agregarle MEZCLA GALLO PREMIUM y la app se negó: el
+   * presupuesto tenía "MAIZ LEALES 25 PENDIENTE" y "MEZCLA GALLO PREM" escritos a mano en IM en
+   * $0 —mercadería ya facturada y remitida que viaja con este pedido— y rehacerlo los borraba.
+   */
+  const CON_PENDIENTES = [
+    { id: 101, cod_articulo: 1, cantidad: 10, cod_lista_precios: 13, descuento_porc: 0, precio: 100, precio_orig: 100, iva_por: 0, detalle: 'ALPISTE X 30 KG' },
+    { id: 58955053, cod_articulo: 0, cantidad: 10, cod_lista_precios: 12, descuento_porc: 100, precio: 0, precio_orig: 1, iva_por: 0, detalle: 'MAIZ LEALES 25 PENDIENTE' },
+    { id: 58955066, cod_articulo: 0, cantidad: 300, cod_lista_precios: 12, descuento_porc: 100, precio: 0, precio_orig: 1, iva_por: 0, detalle: 'MEZCLA GALLO PREM' },
+  ];
+  const AGREGA_UNO = [
+    { cod_articulo: 1, cantidad: 10, cod_lista_precios: 13, descuento_porc: 0, precio: 100 },
+    { cod_articulo: 3, cantidad: 150, cod_lista_precios: 12, descuento_porc: 0, precio: 100 },
+  ];
+  const DE_IM = [
+    { im_renglon_id: '58955053', descripcion: 'MAIZ LEALES 25 PENDIENTE', cantidad: 10, origen: 'im' },
+    { im_renglon_id: '58955066', descripcion: 'MEZCLA GALLO PREM', cantidad: 300, origen: 'im' },
+  ];
+  beforeEach(() => {
+    m.getItemsComprobante.mockResolvedValue(CON_PENDIENTES);
+    tablas.pendientes_entrega = { data: [], error: null };
+  });
+  const guardado = () => rpcs.find(r => r.nombre === 'guardar_pendientes_entrega');
+
+  it('🔑 agregar un producto rehace el presupuesto y los pendientes pasan al NUEVO', async () => {
+    const r = await llamar({ items: AGREGA_UNO, pendientes: DE_IM });
+    expect(r.status).toBe(200);
+    expect(r.body.modo).toBe('recreado');
+    // Al nuevo presupuesto de IM no va ningún renglón sin código: la API lo rechazaría entero.
+    expect(m.crearPresupuesto.mock.calls[0][0].items.map((i: any) => i.cod_articulo)).toEqual([1, 3]);
+    expect(guardado()!.args).toMatchObject({ p_destino: '58800999', p_origen: '58727292' });
+    expect(guardado()!.args.p_lista.map((p: any) => [p.descripcion, p.cantidad, p.im_renglon_id])).toEqual([
+      ['MAIZ LEALES 25 PENDIENTE', 10, '58955053'], ['MEZCLA GALLO PREM', 300, '58955066'],
+    ]);
+    expect(m.anularComprobante).toHaveBeenCalledWith(expect.objectContaining({ id: '58727292' }));
+  });
+
+  it('🔑 una pantalla vieja que no manda la lista igual los conserva todos', async () => {
+    tablas.pendientes_entrega = { data: [{ id: 'a1', im_comprobante_id: '58727292', descripcion: 'PROVENZAL PENDIENTE', cantidad: 2, orden: 0, creado_por: 'jo' }], error: null };
+    const r = await llamar({ items: AGREGA_UNO });
+    expect(r.body.modo).toBe('recreado');
+    expect(guardado()!.args.p_lista.map((p: any) => p.descripcion)).toEqual(['PROVENZAL PENDIENTE', 'MAIZ LEALES 25 PENDIENTE', 'MEZCLA GALLO PREM']);
+    // Quién lo cargó viaja con la fila, no lo pisa quien edita.
+    expect(guardado()!.args.p_lista[0].creado_por).toBe('jo');
+  });
+
+  it('🔴 si no se pueden pasar, se anula el NUEVO y el original queda como estaba', async () => {
+    respuestasRpc.guardar_pendientes_entrega = { data: null, error: { code: '08006', message: 'connection failure' } };
+    const r = await llamar({ items: AGREGA_UNO, pendientes: DE_IM });
+    expect(r.status).toBe(502);
+    expect(r.body.error).toMatch(/sigue como estaba/);
+    expect(m.anularComprobante).toHaveBeenCalledTimes(1);
+    expect(m.anularComprobante.mock.calls[0][0]).toMatchObject({ id: '58800999', numero: 58200 });
+  });
+
+  it('🔴 y si tampoco se puede anular el nuevo, se dice FUERTE: quedaron dos vivos', async () => {
+    respuestasRpc.guardar_pendientes_entrega = { data: null, error: { code: '08006', message: 'connection failure' } };
+    m.anularComprobante.mockResolvedValue({ ok: false, error: 'IM no contestó' });
+    const r = await llamar({ items: AGREGA_UNO, pendientes: DE_IM });
+    expect(r.status).toBe(502);
+    expect(r.body.error).toMatch(/dos vivos/);
+    expect(r.body.error).toMatch(/58200/);
+  });
+
+  it('🔴 sin la migración 055 no se rehace: no hay dónde ponerlos', async () => {
+    tablas.pendientes_entrega = { data: null, error: { code: 'PGRST205', message: 'Could not find the table' } };
+    const r = await llamar({ items: AGREGA_UNO, pendientes: DE_IM });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatch(/055/);
+    expect(r.body.error).toMatch(/MEZCLA GALLO PREM/);
+    expect(m.crearPresupuesto).not.toHaveBeenCalled();
+  });
+
+  it('🔴 si la base no contesta NO se rehace: "no pude leer" no es "no tiene"', async () => {
+    tablas.pendientes_entrega = { data: null, error: { code: '08006', message: 'connection failure' } };
+    const r = await llamar({ items: AGREGA_UNO, pendientes: DE_IM });
+    expect(r.status).toBe(502);
+    expect(m.crearPresupuesto).not.toHaveBeenCalled();
+    expect(m.anularComprobante).not.toHaveBeenCalled();
+  });
+
+  it('🔑 cambiar SÓLO lo que lleva sin cobrar no toca InfoManager', async () => {
+    const r = await llamar({
+      items: [{ cod_articulo: 1, cantidad: 10, cod_lista_precios: 13, descuento_porc: 0, precio: 100 }],
+      pendientes: [...DE_IM, { descripcion: 'MEZCLA GALLO PREMIUM', cantidad: 150, cod_articulo: 3, factura_ref: 'FA B 50680' }],
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.modo).toBe('pendientes');
+    expect(m.actualizarPresupuestoCantidades).not.toHaveBeenCalled();
+    expect(m.crearPresupuesto).not.toHaveBeenCalled();
+    // Los de IM siguen en IM: a la app va sólo lo nuevo.
+    expect(guardado()!.args).toMatchObject({ p_destino: '58727292', p_origen: '58727292' });
+    expect(guardado()!.args.p_lista).toEqual([expect.objectContaining({ descripcion: 'MEZCLA GALLO PREMIUM', cantidad: 150, cod_articulo: 3, factura_ref: 'FA B 50680' })]);
+  });
+
+  it('🔴 sin la migración, cambiar sólo eso avisa y no cambia nada', async () => {
+    tablas.pendientes_entrega = { data: null, error: { code: '42P01', message: 'relation does not exist' } };
+    const r = await llamar({
+      items: [{ cod_articulo: 1, cantidad: 10, cod_lista_precios: 13, descuento_porc: 0, precio: 100 }],
+      pendientes: [...DE_IM, { descripcion: 'OTRO', cantidad: 1 }],
+    });
+    expect(r.status).toBe(503);
+    expect(r.body.error).toMatch(/055/);
+    expect(m.actualizarPresupuestoCantidades).not.toHaveBeenCalled();
+  });
+
+  it('cambiar una cantidad con los de IM tal cual sigue por el camino barato y no los toca', async () => {
+    const r = await llamar({ items: [{ cod_articulo: 1, cantidad: 25, cod_lista_precios: 13, descuento_porc: 0, precio: 100 }], pendientes: DE_IM });
+    expect(r.body.modo).toBe('cantidades');
+    expect(m.actualizarPresupuestoCantidades).toHaveBeenCalledWith('58727292', [{ id: 101, cantidad: 25 }]);
+    expect(guardado()).toBeUndefined();
+  });
+
+  it('🔑 sacar uno de los de IM rehace el presupuesto: es la única forma de que salga de InfoManager', async () => {
+    const r = await llamar({ items: [{ cod_articulo: 1, cantidad: 10, cod_lista_precios: 13, descuento_porc: 0, precio: 100 }], pendientes: [DE_IM[1]] });
+    expect(r.body.modo).toBe('recreado');
+    expect(guardado()!.args.p_lista.map((p: any) => p.descripcion)).toEqual(['MEZCLA GALLO PREM']);
+  });
+
+  it('🪤 si las cantidades salen pero la lista no, se avisa: InfoManager ya cambió', async () => {
+    respuestasRpc.guardar_pendientes_entrega = { data: null, error: { code: '08006', message: 'connection failure' } };
+    const r = await llamar({
+      items: [{ cod_articulo: 1, cantidad: 25, cod_lista_precios: 13, descuento_porc: 0, precio: 100 }],
+      pendientes: [...DE_IM, { descripcion: 'OTRO', cantidad: 1 }],
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.modo).toBe('cantidades');
+    expect(r.body.aviso).toMatch(/NO lo que lleva sin cobrar/);
+  });
+
+  it('una lista mal armada se rechaza antes de tocar nada', async () => {
+    const r = await llamar({ items: AGREGA_UNO, pendientes: [{ descripcion: 'MEZCLA', cantidad: 0 }] });
+    expect(r.status).toBe(400);
+    expect(m.crearPresupuesto).not.toHaveBeenCalled();
   });
 });
 
@@ -677,3 +821,59 @@ it('🔴 un cliente que InfoManager no conoce frena ANTES de anular el original'
   expect(m.anularComprobante).not.toHaveBeenCalled();
 });
 
+
+describe('el papel lleva lo que viaja sin cobrarse (01/10/2026)', () => {
+  /**
+   * 🔑 Mati eligió que la mercadería ya facturada que va con el pedido figure en el papel que firma
+   * el cliente. En el presupuesto es su propia lista; en el remito y la factura, la del presupuesto
+   * del que salieron.
+   */
+  function imprimir(id: string) {
+    let status = 200; let out: any;
+    const req: any = { user: { rol: 'administrativo', sub: 'u1' }, params: { id }, body: {}, query: {} };
+    const res: any = { status: (s: number) => { status = s; return res; }, json: (b: any) => { out = b; } };
+    return comprobanteParaImprimir(req, res).then(() => ({ status, body: out }));
+  }
+  const PR_CON_PENDIENTE = [
+    ...ITEMS_IM,
+    { id: 58955066, cod_articulo: 0, cantidad: 300, cod_lista_precios: 12, descuento_porc: 100, precio: 0, precio_orig: 1, iva_por: 0, detalle: 'MEZCLA GALLO PREM' },
+  ];
+
+  it('🔑 en el presupuesto van en su bloque, no como renglón en $0', async () => {
+    m.getItemsComprobante.mockResolvedValue(PR_CON_PENDIENTE);
+    tablas.pendientes_entrega = { data: [{ id: 'a1', im_comprobante_id: '58727292', cod_articulo: 1, descripcion: 'ALPISTE X 30 KG', cantidad: 4, factura_ref: 'FA B 50680', orden: 0 }], error: null };
+    const r = await imprimir('58727292');
+    expect(r.status).toBe(200);
+    expect(r.body.items.map((i: any) => i.descripcion)).toEqual(['ALPISTE X 30 KG', 'MIJO']);
+    expect(r.body.pendientes.map((p: any) => [p.descripcion, p.cantidad, p.factura_ref])).toEqual([
+      ['ALPISTE X 30 KG', 4, 'FA B 50680'], ['MEZCLA GALLO PREM', 300, null],
+    ]);
+    expect(r.body.aviso_pendientes).toBeNull();
+  });
+
+  it('🔑 el remito lleva los del presupuesto del que salió: es el papel que firma el cliente', async () => {
+    m.cabeceraComprobante.mockResolvedValue({ ...CAB_OK, tipo_comprobante: 'RE', numero: 78400 });
+    tablas.presupuestos_facturados = { data: [{ im_comprobante_id: '58727292' }], error: null };
+    tablas.pendientes_entrega = { data: [{ id: 'a1', im_comprobante_id: '58727292', descripcion: 'MEZCLA GALLO PREM', cantidad: 300, orden: 0 }], error: null };
+    const r = await imprimir('58999001');
+    expect(r.body.pendientes.map((p: any) => p.descripcion)).toEqual(['MEZCLA GALLO PREM']);
+    // Los renglones del remito no se tocan.
+    expect(r.body.items).toHaveLength(2);
+  });
+
+  it('🔴 si no se pudo consultar, el papel sale igual pero lo dice', async () => {
+    m.cabeceraComprobante.mockResolvedValue({ ...CAB_OK, tipo_comprobante: 'FA', numero: 51100 });
+    tablas.presupuestos_facturados = { data: null, error: { message: 'connection failure' } };
+    const r = await imprimir('58999002');
+    expect(r.status).toBe(200);
+    expect(r.body.pendientes).toEqual([]);
+    expect(r.body.aviso_pendientes).toMatch(/No se pudo consultar/);
+  });
+
+  it('una nota de crédito no lleva nada de esto', async () => {
+    m.cabeceraComprobante.mockResolvedValue({ ...CAB_OK, tipo_comprobante: 'NC', numero: 30200 });
+    const r = await imprimir('58999003');
+    expect(r.body.pendientes).toEqual([]);
+    expect(r.body.aviso_pendientes).toBeNull();
+  });
+});

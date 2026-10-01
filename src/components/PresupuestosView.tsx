@@ -4,11 +4,11 @@ import { useLecturaVigente } from '../utils/useLecturaVigente';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     AlertTriangle, Check, CircleAlert, Loader2, RefreshCw, ChevronRight, X, Package,
-    MessageSquare, Printer, Search, Ban,
+    MessageSquare, Printer, Search, Ban, Truck,
 } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import { coincide } from '../utils/buscar';
-import { EditorPresupuesto } from './EditorPresupuesto';
+import { EditorPresupuesto, type PendienteEditable } from './EditorPresupuesto';
 import { imprimirComprobante } from '../utils/imprimirComprobante';
 import { useRecargarAlVolver } from '../utils/recargarAlVolver';
 import './PresupuestosView.css';
@@ -69,6 +69,8 @@ interface Presupuesto {
      */
     hermanos: Array<{ im_comprobante_id: string; im_numero: number | null; total: number }>;
     stock_consultado: boolean;
+    /** Mercadería ya facturada que viaja con este pedido (01/10/2026): no se cobra. */
+    pendientes?: PendienteEditable[];
 }
 
 interface ItemDetalle {
@@ -150,7 +152,7 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
     const [trabajando, setTrabajando] = useState<string | null>(null);
     /** Qué presupuesto tiene el detalle abierto, y sus renglones. */
     const [abierto, setAbierto] = useState<string | null>(null);
-    const [detalle, setDetalle] = useState<{ id: string; huella: string; numero: number | null; cliente: string; cod_cliente: number | null; fecha: string | null; observaciones: string; items: ItemDetalle[] } | null>(null);
+    const [detalle, setDetalle] = useState<{ id: string; huella: string; numero: number | null; cliente: string; cod_cliente: number | null; fecha: string | null; observaciones: string; items: ItemDetalle[]; pendientes?: PendienteEditable[] | null; pendientes_disponibles?: boolean; pendientes_error?: string | null } | null>(null);
     const abiertoRef = useRef<string | null>(null);
     const controlDetalle = useRef(new LecturaVigente());
     const detalleRef = useRef(detalle); detalleRef.current = detalle;
@@ -291,7 +293,7 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
             if (!d?.comprobante?.huella || (d.comprobante.im_comprobante_id != null && String(d.comprobante.im_comprobante_id) !== id)) throw new Error('El detalle no identifica el presupuesto. Actualizá antes de editar.');
             const previo = reparto.borradores.get(`base:${id}`);
             if (previo && previo.huella !== d.comprobante.huella) setAviso("El presupuesto cambió desde el borrador. Se conserva su versión original; descartá los cambios para revisar la versión actual.");
-            setDetalle(previo ?? { id, huella: d.comprobante.huella, numero: d.comprobante.numero ?? d.comprobante.im_numero ?? null, cliente: d.comprobante.cliente_nombre || `Cliente ${d.comprobante.cod_cliente ?? "sin identificar"}`, cod_cliente: d.comprobante.cod_cliente ?? null, fecha: d.comprobante.fecha, observaciones: d.comprobante.observaciones ?? '', items: d.items ?? [] });
+            setDetalle(previo ?? { id, huella: d.comprobante.huella, numero: d.comprobante.numero ?? d.comprobante.im_numero ?? null, cliente: d.comprobante.cliente_nombre || `Cliente ${d.comprobante.cod_cliente ?? "sin identificar"}`, cod_cliente: d.comprobante.cod_cliente ?? null, fecha: d.comprobante.fecha, observaciones: d.comprobante.observaciones ?? '', items: d.items ?? [], pendientes: d.pendientes === undefined ? [] : d.pendientes, pendientes_disponibles: d.pendientes_disponibles === true, pendientes_error: d.pendientes_error ?? null });
         } catch (e: any) {
             if (!lectura.vigente()) return;
             setAviso(e?.message ?? 'Error al traer el detalle'); cerrarDetalle();
@@ -322,6 +324,9 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
                                             observacionesOriginales={base.observaciones}
                                             fechaOriginal={base.fecha}
                                             clienteOriginal={base.cod_cliente != null ? { cod: base.cod_cliente, nombre: base.cliente } : null}
+                                            pendientesOriginales={base.pendientes === undefined ? [] : base.pendientes}
+                                            pendientesDisponibles={base.pendientes_disponibles === true}
+                                            pendientesError={base.pendientes_error ?? null}
                                             itemsOriginales={base.items.map(it => ({
                                                 id: it.id,
                                                 cod_articulo: it.cod_articulo,
@@ -344,7 +349,9 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
                                             onGuardado={(r) => {
                                                 setAviso(r.aviso ?? (r.modo === 'recreado'
                                                     ? `Listo: se rehizo el presupuesto y ahora es el ${r.im_numero ?? ''}. Como cambió, quedó sin revisar.`
-                                                    : 'Listo: cantidades corregidas en InfoManager.'));
+                                                    : r.modo === 'pendientes'
+                                                        ? 'Listo: se guardó lo que lleva sin cobrar. InfoManager no se tocó.'
+                                                        : 'Listo: cantidades corregidas en InfoManager.'));
                                                 reparto.borradores.delete(`base:${base.id}`);
                                                 controlDetalle.current.invalidar(); abiertoRef.current = null; setAbierto(null); setDetalle(null);
                                                 void cargar(true);
@@ -506,6 +513,12 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
                                         la revisión. */}
                                     {p.observaciones && (
                                         <div className="pr-obs-im"><MessageSquare size={12} /> <span>{p.observaciones}</span></div>
+                                    )}
+                                    {/* 🔑 Lo que viaja sin cobrarse: quien arma el pedido tiene que verlo sin abrirlo. */}
+                                    {!!p.pendientes?.length && (
+                                        <div className="pr-obs-im pr-pendientes" title="Mercadería ya facturada que va en este pedido: no se cobra">
+                                            <Truck size={12} /> <span>Lleva además, ya facturado: {p.pendientes.map(x => `${Number(x.cantidad).toLocaleString('es-AR')} ${x.descripcion}`).join(' · ')}</span>
+                                        </div>
                                     )}
                                     {rev?.observacion && <div className="pr-obs">Revisión: “{rev.observacion}”</div>}
                                 </div>

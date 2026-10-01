@@ -100,6 +100,14 @@ export interface DatosPresupuesto {
   fecha: string | Date;
   items: RenglonPresupuesto[];
   observaciones?: string | null;
+  /**
+   * 🔑 Mercadería YA FACTURADA que viaja con este pedido. Mati (01/10/2026) eligió que figure en el
+   * papel que firma el cliente: no se cobra, pero se entrega. Va en su propio bloque, no como
+   * renglón en $0 (que parecería un regalo).
+   */
+  pendientes?: Array<{ descripcion: string; cantidad: number; factura_ref?: string | null }>;
+  /** Si no se pudo consultar, el papel lo dice: callarlo es justo lo que esto viene a evitar. */
+  aviso_pendientes?: string | null;
   /** Qué dice el papel. El mismo formato sirve para los tres comprobantes. */
   tipo?: 'Presupuesto' | 'Factura' | 'Remito' | 'Nota de crédito' | 'Nota de débito';
   /**
@@ -381,6 +389,30 @@ export function generarPresupuestoPdf(d: DatosPresupuesto): { blob: Blob; nombre
   doc.setFontSize(8);
   doc.text(`${d.items.length} ${d.items.length === 1 ? 'producto' : 'productos'}`, MARGEN, y + 8);
   y += 12 + 6;
+  }
+
+  // ── Lo que viaja sin cobrarse ──
+  const pendientes = d.pendientes ?? [];
+  if (pendientes.length || d.aviso_pendientes) {
+    doc.setFontSize(8.5);
+    const lineas: string[] = pendientes.flatMap(p => doc.splitTextToSize(
+      `${Number(p.cantidad).toLocaleString('es-AR')} × ${p.descripcion}${p.factura_ref ? ` (${p.factura_ref})` : ''}`,
+      ancho - MARGEN * 2 - 8) as string[]);
+    if (d.aviso_pendientes) lineas.push(d.aviso_pendientes);
+    const alto = 8 + lineas.length * 3.8;
+    if (y + alto > PISO) { doc.addPage(); membrete(doc, d, ancho); y = ALTO_BANDA + AIRE + 3; }
+    // Recuadro, no relleno: tiene que verse igual en la láser blanco y negro.
+    doc.setDrawColor(...GREEN);
+    doc.setLineWidth(0.4);
+    doc.roundedRect(MARGEN, y, ancho - MARGEN * 2, alto, 1.6, 1.6, 'S');
+    doc.setLineWidth(0.2);
+    doc.setTextColor(...GREEN);
+    rotulo(doc, 'Entrega de mercadería ya facturada — no se cobra', MARGEN + 4, y + 4.6);
+    doc.setTextColor(...DARK);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.text(lineas, MARGEN + 4, y + 9);
+    y += alto + 4;
   }
 
   if (d.observaciones) {

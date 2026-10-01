@@ -61,3 +61,47 @@ describe('el peso de una entrega abierta', () => {
     expect(f.kg_snapshot).toBe(300);
   });
 });
+
+describe('lo que viaja sin cobrarse con cada entrega (01/10/2026)', async () => {
+  const { conPendientes } = await import('./repartoDatos.js');
+  const cat = new Map<number, any>([[491, { equivalencia_um: 1 }]]);
+  const datos = { porPresupuesto: new Map([['58954399', [
+    { id: 'a1', im_renglon_id: null, cod_articulo: 491, descripcion: 'MEZCLA GALLO PREMIUM', cantidad: 300, factura_ref: 'FA B 50680', origen: 'app' },
+    { id: 'a2', im_renglon_id: '58955053', cod_articulo: null, descripcion: 'MAIZ LEALES 25 PENDIENTE', cantidad: 10, factura_ref: null, origen: 'app' },
+  ]]]), cat };
+  const entrega = (over: Record<string, any> = {}) => ({ ...fila(), im_presupuesto_id: '58954399', ...over });
+
+  it('🔑 en una hoja abierta suma al peso recalculado y lleva la lista', () => {
+    const [f] = conPendientes([entrega({ bultos: 12, kg: 70, kg_snapshot: 300, renglones_sin_peso: 0 })], datos, true);
+    expect(f.bultos).toBe(322);
+    expect(f.kg).toBe(370);
+    // El de IM sin artículo cuenta el bulto pero no inventa kilos: la hoja lo dice.
+    expect(f.renglones_sin_peso).toBe(1);
+    expect(f.peso_completo).toBe(false);
+    expect((f as any).pendientes.map((p: any) => p.descripcion)).toEqual(['MEZCLA GALLO PREMIUM', 'MAIZ LEALES 25 PENDIENTE']);
+  });
+
+  it('🪤 sobre el RESPALDO no se suma: el peso guardado al armar la hoja ya los trae', () => {
+    const [f] = conPendientes([entrega({ bultos: 322, kg: 370 })], datos, true);
+    expect(f.bultos).toBe(322);
+    expect(f.kg).toBe(370);
+    expect((f as any).pendientes).toHaveLength(2);
+  });
+
+  it('en una hoja cerrada sólo se muestran: su peso es historia', () => {
+    const [f] = conPendientes([entrega({ bultos: 12, kg: 70, kg_snapshot: 300 })], datos, false);
+    expect(f.kg).toBe(70);
+    expect((f as any).pendientes).toHaveLength(2);
+  });
+
+  it('una entrega sin presupuesto de origen conocido no se toca', () => {
+    const [f] = conPendientes([entrega({ im_presupuesto_id: null })], datos, true);
+    expect((f as any).pendientes).toBeUndefined();
+  });
+
+  it('sin poder leerlos (o sin la migración), la hoja sale como antes', () => {
+    const [f] = conPendientes([entrega({ kg_snapshot: 300 })], { porPresupuesto: null, cat }, true);
+    expect(f.kg).toBe(300);
+    expect((f as any).pendientes).toBeUndefined();
+  });
+});

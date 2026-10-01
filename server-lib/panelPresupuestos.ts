@@ -30,6 +30,7 @@ import { nombreListaLargo } from './listas.js';
 import { armarFraccionado, totalesFraccionado, armarProduccion } from './fraccionado.js';
 import { huellaPresupuesto, exigirHuella, exigirTipoEmpresa, bloquearPresupuesto, desbloquearPresupuesto, invalidarAprobacion, rechazoEdicionConfirmado, ErrorVersion } from './versionPresupuesto.js';
 import { formatosDeBolsa } from './formatosBolsa.js';
+import { esPendienteDeIM, leerPendientes, unirPendientes, pendientesParaMostrar } from './pendientesEntrega.js';
 
 /** Sólo la oficina (admin, gerente y administrativo). Devuelve true si ya contestó el 403. */
 function frenaSiNoPuede(req: Request & { user?: JwtPayload }, res: Response): boolean {
@@ -198,13 +199,24 @@ export async function detallePresupuesto(req: Request & { user?: JwtPayload }, r
   if (frenaSiNoPuede(req, res)) return;
   try {
     const id = String(req.params.comprobanteId);
-    const [{ cabecera: cab, items }, cat, stock] = await Promise.all([
+    const [{ cabecera: cab, items }, cat, stock, guardados] = await Promise.all([
       leerComprobante(id),
       fetchArticulosCatalogo(),
       // 🪤 `null` = no se pudo consultar, que no es "no hay stock". La pantalla no marca nada.
       fetchStockPorDeposito(Number(process.env.PEDIDO_DEPOSITO || 1)).catch(() => null),
+      // Lo que viaja sin cobrarse guardado en la app. Un error queda a la vista (ver abajo).
+      leerPendientes([id]).catch((e: any) => e as Error),
     ]);
     if (cab.existe === false) { res.status(404).json({ error: 'El presupuesto ya no está en InfoManager.' }); return; }
+    /**
+     * 🔑 LO QUE VIAJA SIN COBRARSE VA APARTE DE LOS RENGLONES (Mati, 01/10/2026; ver
+     * `pendientesEntrega.ts`): lo de la app y lo escrito a mano en IM en $0, juntos.
+     *
+     * 🪤 Si no se pudo leer, `pendientes` va en `null` y la pantalla no deja tocarlos: con una
+     * lista vacía por error, guardar los borraría.
+     */
+    const leyoPendientes = !(guardados instanceof Error);
+    const pendientes = leyoPendientes ? pendientesParaMostrar(unirPendientes(guardados?.get(id) ?? [], items)) : null;
 
     /**
      * 🔄 El precio sale del PROPIO renglón (`getItemsComprobante`), no de un mapa por artículo
@@ -227,7 +239,11 @@ export async function detallePresupuesto(req: Request & { user?: JwtPayload }, r
         observaciones: cab.observaciones,
       },
       stock_consultado: !!stock,
-      items: items.map(it => {
+      pendientes,
+      // `false` = falta la migración 055: se ven los de IM pero no se pueden cargar nuevos.
+      pendientes_disponibles: leyoPendientes && guardados !== null,
+      pendientes_error: leyoPendientes ? null : `No pude leer lo que lleva sin cobrar: ${(guardados as Error).message}`,
+      items: items.filter(it => !esPendienteDeIM(it)).map(it => {
         const art = cat.get(Number(it.cod_articulo));
         return {
           id: it.id,

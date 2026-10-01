@@ -104,7 +104,7 @@ function fakeSb(resultados: Record<string, any>) {
         maybeSingle: () => Promise.resolve(resultado()),
         update: (v: any) => { escribiendo = true; updates.push([t, v]); return q; },
       };
-      for (const m of ['select', 'eq', 'order', 'delete', 'insert']) q[m] = () => q;
+      for (const m of ['select', 'eq', 'in', 'order', 'delete', 'insert']) q[m] = () => q;
       return q;
     },
   }));
@@ -349,7 +349,7 @@ function fakeSbConFallas(fallas: { del?: string; ins?: string; updFinal?: string
         delete: () => { if (t === 'pedidos_vendedor_items' && fallas.del) res = { data: null, error: { message: fallas.del } }; return q; },
         insert: () => { if (fallas.ins) res = { data: null, error: { message: fallas.ins } }; return q; },
       };
-      for (const m of ['select', 'eq', 'order']) q[m] = () => q;
+      for (const m of ['select', 'eq', 'in', 'order']) q[m] = () => q;
       return q;
     },
   }));
@@ -398,7 +398,7 @@ describe('editarPedido — que no se pierda de vista un presupuesto vivo', () =>
           maybeSingle: () => Promise.resolve(res),
           update: (v: any) => { updates.push([t, v]); return q; },
         };
-        for (const m of ['select', 'eq', 'order', 'delete', 'insert']) q[m] = () => q;
+        for (const m of ['select', 'eq', 'in', 'order', 'delete', 'insert']) q[m] = () => q;
         return q;
       },
     }));
@@ -498,4 +498,46 @@ it('anulación local exige fila confirmada y no libera el claim cuando la actual
   const res: any = { status: (c: number) => {code = c; return res;}, json: (b: any) => {body = b;} };
   await anularPedido({params: {id: PEDIDO_ID}, user: USER} as any, res);
   expect(code).toBe(503); expect(body.ok).not.toBe(true); expect(claims.has(`pedido:${PEDIDO_ID}`)).toBe(true); expect(im.anularComprobante).not.toHaveBeenCalled();
+});
+
+describe('editarPedido — lo que la oficina cargó a mano (01/10/2026)', () => {
+  /**
+   * 🔴 CARDENES, PR 59080, es un pedido de la app de un vendedor y la oficina le escribió a mano en
+   * IM "MEZCLA GALLO PREM" en $0 (mercadería ya facturada). Si el vendedor cambia el surtido, el
+   * presupuesto se rehace y eso se perdía EN SILENCIO. Se frena y se dice quién lo puede cambiar.
+   */
+  it('🔴 con un renglón escrito a mano en IM, rehacer se frena antes de tocar nada', async () => {
+    im.getItemsComprobante.mockResolvedValue([
+      { id: 1, cod_articulo: 100, cantidad: 5, cod_lista_precios: 12 },
+      { id: 2, cod_articulo: 0, cantidad: 300, cod_lista_precios: 12, precio: 0, detalle: 'MEZCLA GALLO PREM' },
+    ]);
+    const { status, body } = await editar(SURTIDO_NUEVO);
+    expect(status).toBe(409);
+    expect(body.error).toMatch(/MEZCLA GALLO PREM/);
+    expect(body.error).toMatch(/oficina/);
+    expect(im.crearPresupuesto).not.toHaveBeenCalled();
+    expect(im.anularComprobante).not.toHaveBeenCalled();
+  });
+
+  it('🔴 con lo ya facturado guardado en la app, también', async () => {
+    fakeSb({
+      pedidos_vendedor: { data: PEDIDO, error: null },
+      pedidos_vendedor_items: { data: ACTUALES, error: null },
+      pendientes_entrega: { data: [{ id: 'a1', im_comprobante_id: '58640964', descripcion: 'MAIZ LEALES 25 PENDIENTE', cantidad: 10, orden: 0 }], error: null },
+    });
+    const { status, body } = await editar(SURTIDO_NUEVO);
+    expect(status).toBe(409);
+    expect(body.error).toMatch(/MAIZ LEALES 25 PENDIENTE/);
+    expect(im.crearPresupuesto).not.toHaveBeenCalled();
+  });
+
+  it('cambiar sólo cantidades sigue andando: no rehace nada', async () => {
+    im.getItemsComprobante.mockResolvedValue([
+      { id: 1, cod_articulo: 100, cantidad: 5, cod_lista_precios: 12 },
+      { id: 2, cod_articulo: 0, cantidad: 300, cod_lista_precios: 12, precio: 0, detalle: 'MEZCLA GALLO PREM' },
+    ]);
+    const { status } = await editar(SOLO_CANTIDADES);
+    expect(status).toBe(200);
+    expect(im.actualizarPresupuestoCantidades).toHaveBeenCalledWith(58640964, [{ id: 1, cantidad: 9 }]);
+  });
 });

@@ -370,6 +370,8 @@ export async function impresionHoja(req: Request & { user?: JwtPayload }, res: R
         im_remito_numero: p.im_remito_numero ?? null,
         im_factura_id: p.im_factura_id ?? null,
         facturado: !!p.facturado_at, factura_origen: p.factura_origen, notas: p.notas,
+        // La mercadería ya facturada que viaja con esta entrega: el repartidor la tiene que entregar.
+        pendientes: p.pendientes ?? [],
       });
       c.total += Number(p.total ?? 0);
       c.bultos += Number(p.bultos ?? 0);
@@ -724,9 +726,14 @@ export async function asignarPedidos(req: Request & { user?: JwtPayload }, res: 
     const filas = entrada.map((p) => {
       const peso = pesos.get(String(p.im_comprobante_id));
       const emitido = facturado.get(String(p.im_comprobante_id));
+      /**
+       * 🔑 Lo que viaja sin cobrarse también va en el camión (ver `pendientesEntrega.ts`): se suma al
+       * peso recalculado. Sin peso de IM queda el de `enriquecerEntregas`, que ya lo trae.
+       */
+      const extra = p.peso_pendientes ?? { bultos: 0, kg: 0, renglones_sin_peso: 0 };
       return {
         hoja_id: hojaId, cod_empresa: p.cod_empresa, factura_origen: p.factura_origen, tipo_comprobante: p.tipo_comprobante, datos_consultados_at: p.datos_consultados_at,
-        peso_completo: !!peso && peso.renglones_sin_peso === 0, renglones_sin_peso: peso?.renglones_sin_peso ?? null,
+        peso_completo: !!peso && peso.renglones_sin_peso + extra.renglones_sin_peso === 0, renglones_sin_peso: peso ? peso.renglones_sin_peso + extra.renglones_sin_peso : null,
         im_comprobante_id: String(p.im_comprobante_id),
         im_numero: p.im_numero != null ? Number(p.im_numero) : null,
         cod_cliente: Number(p.cod_cliente),
@@ -734,8 +741,8 @@ export async function asignarPedidos(req: Request & { user?: JwtPayload }, res: 
         pedido_id: p.pedido_id ? String(p.pedido_id) : null,
         orden: ++orden,
         saldo_anterior: saldos.get(Number(p.cod_cliente)) ?? null,
-        bultos: peso ? peso.bultos : (Number(p.bultos) || 0),
-        kg: peso ? peso.kg : (Number(p.kg) || 0),
+        bultos: peso ? Math.round((peso.bultos + extra.bultos) * 100) / 100 : (Number(p.bultos) || 0),
+        kg: peso ? Math.round((peso.kg + extra.kg) * 100) / 100 : (Number(p.kg) || 0),
         // El importe sale impreso en la hoja ("Imp. Total" y "Total por cliente").
         total: Number(p.total) || 0,
         // 🔑 La fecha del comprobante, no la de la hoja: una hoja puede llevar arrastre de días

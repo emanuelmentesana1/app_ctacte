@@ -1,7 +1,7 @@
 import { useReparto, useOperacionReparto } from './RepartoContext';
 import { useLecturaVigente } from '../utils/useLecturaVigente';
 import { useEffect, useMemo, useState } from 'react';
-import { Save, Trash2, Plus, Search, AlertTriangle, Loader2, X } from 'lucide-react';
+import { Save, Trash2, Plus, Search, AlertTriangle, Loader2, X, Truck } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import './EditorPresupuesto.css';
 import { useControlListas } from '../utils/useControlListas';
@@ -41,6 +41,29 @@ export interface ItemEditable {
     stock?: number | null;
 }
 
+/**
+ * 🔑 MERCADERÍA YA FACTURADA QUE VIAJA CON ESTE PEDIDO. Mati (01/10/2026): *"es mercaderia que ya
+ * estaba facturada y remitida antes.. y jo la agrega unicamente para que la puedan cargar en la
+ * parte de logistica, no hay que facturarla de nuevo"*. No se cobra ni descuenta stock: va al
+ * camión y al papel que firma el cliente (ver `server-lib/pendientesEntrega.ts`).
+ */
+export interface PendienteEditable {
+    uid?: string;
+    /** La fila en la app. Sin id: todavía no se guardó, o sigue escrito en InfoManager. */
+    id?: string | null;
+    im_renglon_id: string | null;
+    cod_articulo: number | null;
+    descripcion: string;
+    cantidad: number | string;
+    factura_ref: string | null;
+    /** `im` = sigue escrito a mano en InfoManager: tocarlo obliga a rehacer el presupuesto. */
+    origen: 'app' | 'im';
+}
+
+/** Para comparar dos listas de pendientes: qué, cuánto, de qué factura y de dónde, en orden. */
+const firmaPendientes = (ps: PendienteEditable[]) =>
+    ps.map(p => `${p.cod_articulo ?? ''}|${p.descripcion}|${Number(p.cantidad)}|${(p.factura_ref ?? '').trim()}|${p.im_renglon_id ?? ''}`).join('·');
+
 interface ArticuloBuscado {
     cod_articulo: number;
     descripcion: string;
@@ -66,11 +89,19 @@ const money = (n: number) => '$' + Math.round(n).toLocaleString('es-AR');
 const firma = (rs: ItemEditable[]) =>
     rs.map(r => `${r.cod_articulo}:${Number(r.cod_lista_precios)}:${Number(r.descuento_porc) || 0}:${Number(r.precio) || 0}`).join('|');
 
-export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, itemsOriginales, observacionesOriginales, fechaOriginal, clienteOriginal, onGuardado, onCancelar, onBorrador }: {
+export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, itemsOriginales, observacionesOriginales, fechaOriginal, clienteOriginal, pendientesOriginales = [], pendientesDisponibles = false, pendientesError = null, onGuardado, onCancelar, onBorrador }: {
     comprobanteId: string;
     huellaOriginal: string | null;
     numero: number | null;
     itemsOriginales: ItemEditable[];
+    /**
+     * Lo que ya viaja sin cobrarse. `null` = no se pudo leer: no se muestra ni se manda, así
+     * guardar no lo borra por no haberlo visto.
+     */
+    pendientesOriginales?: PendienteEditable[] | null;
+    /** `false` = la base todavía no tiene la tabla (migración 055): se ven, no se tocan. */
+    pendientesDisponibles?: boolean;
+    pendientesError?: string | null;
     /**
      * 🔑 A quién va el pedido. Mati (17/09/2026): *"necesitamos poder cambiar el cliente en el
      * presupuesto"* — el caso es haberlo cargado al equivocado. Cambiarlo obliga a rehacer el
@@ -93,6 +124,10 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
     const [items, setItems] = useState<ItemEditable[]>(() => (previo?.items ?? itemsOriginales).map((i: ItemEditable) => ({ ...i, uid: i.uid ?? crypto.randomUUID() })));
     const [observaciones, setObservaciones] = useState<string>(previo?.observaciones ?? observacionesOriginales ?? '');
     const [fecha, setFecha] = useState<string>(previo?.fecha ?? fechaOriginal ?? '');
+    const [pendientes, setPendientes] = useState<PendienteEditable[]>(() =>
+        (previo?.pendientes ?? pendientesOriginales ?? []).map((p: PendienteEditable) => ({ ...p, uid: p.uid ?? crypto.randomUUID() })));
+    // Con la tabla y la lista leídas: si no, se muestran pero no se tocan.
+    const pendientesEditables = pendientesDisponibles && pendientesOriginales !== null;
     const [codCliente, setCodCliente] = useState<number | null>(clienteOriginal?.cod ?? null);
     const [clientes, setClientes] = useState<Array<{ cod: number; nombre: string; localidad: string }>>([]);
     const cambiaCliente = clienteOriginal != null && codCliente != null && codCliente !== clienteOriginal.cod;
@@ -143,7 +178,9 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
         })();
         return () => ctrl.abort();
     }, [claveCotizacion, intentoPrecio]);
-    const control = useControlListas(items.map(i => ({ cod_articulo: i.cod_articulo, cantidad: Number(i.cantidad), cod_lista: Number(i.cod_lista_precios), descuento_porc: Number(i.descuento_porc ?? 0) })), comprobanteId);
+    // 🪤 Sin renglones sin código: el control los rechaza y se apagaba entero ("Control de listas
+    // no disponible") en cada presupuesto con algo escrito a mano en IM.
+    const control = useControlListas(items.filter(i => Number(i.cod_articulo) > 0).map(i => ({ cod_articulo: i.cod_articulo, cantidad: Number(i.cantidad), cod_lista: Number(i.cod_lista_precios), descuento_porc: Number(i.descuento_porc ?? 0) })), comprobanteId);
     const avisosLista = control?.datos?.avisos.flatMap(a => [a.severidad === 'margen' ? a.mensaje : null, a.mensaje_descuento].filter((x): x is string => !!x)) ?? [];
 
     /**
@@ -152,18 +189,28 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
      */
     // 🪤 Cambiar el cliente rehace el comprobante aunque la mercadería sea idéntica: vive en la
     // cabecera y el PUT de cantidades no la toca.
-    const seRecrea = cambiaCliente || firma(items) !== firma(itemsOriginales);
+    /**
+     * 🔑 Tocar uno de los escritos a mano en InfoManager también rehace: es la única forma de
+     * sacarlo de allá. Al rehacer, todos pasan a la app y siguen viajando con el pedido.
+     */
+    const pendientesIMOriginales = (pendientesOriginales ?? []).filter(p => p.origen === 'im');
+    const cambianLosDeIM = firmaPendientes(pendientes.filter(p => p.origen === 'im')) !== firmaPendientes(pendientesIMOriginales);
+    const cambianLosDeLaApp = firmaPendientes(pendientes.filter(p => p.origen === 'app')) !== firmaPendientes((pendientesOriginales ?? []).filter(p => p.origen === 'app'));
+    const seRecrea = cambiaCliente || firma(items) !== firma(itemsOriginales) || cambianLosDeIM;
     const cambiaObs = observaciones.trim() !== (observacionesOriginales ?? '').trim();
     const cambiaFecha = !!fecha && fecha !== (fechaOriginal ?? '');
-    const hayCambios = seRecrea || cambiaObs || cambiaFecha
-        || items.some((it, i) => Number(it.cantidad) !== Number(itemsOriginales[i]?.cantidad))
+    const cambianCantidades = items.some((it, i) => Number(it.cantidad) !== Number(itemsOriginales[i]?.cantidad));
+    const hayCambios = seRecrea || cambiaObs || cambiaFecha || cambianLosDeLaApp
+        || cambianCantidades
         || items.some((it, i) => Number(it.precio) !== Number(itemsOriginales[i]?.precio));
+    // Si es lo único que cambió, InfoManager no se toca: esa lista vive en la app.
+    const soloPendientes = cambianLosDeLaApp && !seRecrea && !cambiaObs && !cambiaFecha && !cambianCantidades;
 
     useEffect(() => {
-        if (hayCambios) reparto.borradores.set(claveBorrador, { items, observaciones, fecha });
+        if (hayCambios) reparto.borradores.set(claveBorrador, { items, observaciones, fecha, pendientes });
         else reparto.borradores.delete(claveBorrador);
         onBorrador(hayCambios);
-    }, [items, observaciones, fecha, hayCambios, claveBorrador, reparto.borradores, onBorrador]);
+    }, [items, observaciones, fecha, pendientes, hayCambios, claveBorrador, reparto.borradores, onBorrador]);
     const { iniciar: iniciarBusqueda, invalidar: invalidarBusqueda } = useLecturaVigente(busqueda.trim());
     const total = useMemo(() => items.reduce((s, i) =>
         s + (Number(i.precio ?? 0) * Number(i.cantidad) * (1 - (Number(i.descuento_porc) || 0) / 100)), 0), [items]);
@@ -210,9 +257,26 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
         setBusqueda(''); setResultados(null);
     }
 
+    /** Suma mercadería ya facturada que viaja con este pedido: no se cobra ni descuenta stock. */
+    function agregarPendiente(a: ArticuloBuscado) {
+        if (operacion.enCurso.current || !pendientesEditables) return;
+        setPendientes(xs => [...xs, {
+            uid: crypto.randomUUID(), id: null, im_renglon_id: null,
+            cod_articulo: a.cod_articulo, descripcion: a.descripcion, cantidad: 1, factura_ref: null, origen: 'app',
+        }]);
+        setBusqueda(''); setResultados(null);
+    }
+
+    function cambiarPendiente(uid: string, campo: 'cantidad' | 'factura_ref', valor: string) {
+        if (operacion.enCurso.current || !pendientesEditables) return;
+        setPendientes(xs => xs.map(p => p.uid !== uid ? p : { ...p, [campo]: campo === 'cantidad' ? valor.replace(',', '.') : valor }));
+    }
+
     async function guardar() {
         if (operacion.enCurso.current) return;
         if (!items.length) { setError('Tiene que quedar al menos un producto.'); return; }
+        const pendienteMal = pendientes.find(p => !(Number(p.cantidad) > 0));
+        if (pendienteMal) { setError(`"${pendienteMal.descripcion}" (ya facturado) tiene la cantidad en cero o vacía. Sacalo con el tacho o poné una cantidad.`); return; }
         if (items.some(i => !(Number(i.cantidad) > 0))) { setError('Hay un renglón con cantidad cero o vacía. Sacalo con el tacho o poné una cantidad.'); return; }
         // 🪤 Sin precio InfoManager graba el renglón en $0 — no lo busca en la lista.
         const sinPrecio = items.find(i => !(Number(i.precio) > 0));
@@ -223,6 +287,7 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                 ? `El pedido pasa de ${clienteOriginal?.nombre} a ${nombreNuevo}.\n\nLos precios y el vendedor quedan como están.\n\n`
                 : `Este cambio no se puede hacer sobre el mismo presupuesto: InfoManager sólo deja corregir cantidades.\n\n`) +
             `Se va a crear un presupuesto NUEVO con estos datos y se va a anular el ${numero ?? ''}.\n\n` +
+            (pendientesIMOriginales.length ? `Lo escrito a mano en InfoManager que va sin cobrar pasa a la app y sigue viajando con el pedido.\n\n` : '') +
             `El número cambia. ¿Seguimos?`)) return;
 
         if (!operacion.comenzar()) return;
@@ -237,6 +302,14 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                     fecha,
                     // Sólo si de verdad cambió: mandarlo igual haría rehacer el comprobante al pedo.
                     ...(cambiaCliente ? { cod_cliente: codCliente } : {}),
+                    // 🪤 Sin la lista leída no se manda: el servidor conserva lo que haya.
+                    ...(pendientesOriginales !== null ? {
+                        pendientes: pendientes.map(p => ({
+                            id: p.id ?? null, im_renglon_id: p.im_renglon_id, cod_articulo: p.cod_articulo,
+                            descripcion: p.descripcion, cantidad: Number(p.cantidad),
+                            factura_ref: (p.factura_ref ?? '').trim() || null, origen: p.origen,
+                        })),
+                    } : {}),
                     items: items.map(i => ({
                         cod_articulo: i.cod_articulo,
                         cantidad: Number(i.cantidad),
@@ -344,6 +417,58 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                 </tbody>
             </table></div>
 
+            {/* ─── Lo que viaja sin cobrarse ──────────────────────────────────────
+                🔑 Mati (01/10/2026): mercadería ya facturada y remitida antes, que va en este
+                camión. No se factura ni descuenta stock: sale en el remito y en la hoja de ruta. */}
+            {(pendientes.length > 0 || pendientesEditables || !!pendientesError) && (
+                <div className="ed-pendientes">
+                    <div className="ed-pend-titulo">
+                        <Truck size={14} /> <b>Lleva además, ya facturado</b>
+                        <span>no se cobra ni descuenta stock: va al camión y al remito</span>
+                    </div>
+                    {pendientesError && <div className="ed-aviso error"><AlertTriangle size={14} /><span>{pendientesError}</span></div>}
+                    {!!pendientes.length && (
+                        <table className="ed-tabla ed-pend-tabla">
+                            <thead><tr><th>Producto</th><th className="n">Cantidad</th><th>Factura</th><th /></tr></thead>
+                            <tbody>
+                                {pendientes.map(p => (
+                                    <tr key={p.uid} className={p.origen === 'im' ? 'ed-pend-im' : ''}>
+                                        <td>
+                                            {p.descripcion}
+                                            {p.origen === 'im' && (
+                                                <span className="ed-tag-im" title="Escrito a mano en InfoManager. Si se rehace el presupuesto, pasa a la app y sigue viajando con el pedido.">en InfoManager</span>
+                                            )}
+                                        </td>
+                                        <td className="n">
+                                            <input aria-label={`Cantidad ya facturada de ${p.descripcion}`} className="ed-pend-cant" type="text" inputMode="decimal"
+                                                   value={String(p.cantidad)} disabled={!pendientesEditables}
+                                                   onChange={e => cambiarPendiente(p.uid!, 'cantidad', e.target.value)} />
+                                        </td>
+                                        <td>
+                                            <input aria-label={`Factura de ${p.descripcion}`} className="ed-ref" type="text" maxLength={60}
+                                                   placeholder="FA B 50680" value={p.factura_ref ?? ''} disabled={!pendientesEditables}
+                                                   onChange={e => cambiarPendiente(p.uid!, 'factura_ref', e.target.value)} />
+                                        </td>
+                                        <td className="n">
+                                            <button className="ed-icono" title="Sacar: ya no va en este pedido" disabled={!pendientesEditables}
+                                                    onClick={() => { if (!operacion.enCurso.current) setPendientes(xs => xs.filter(x => x.uid !== p.uid)); }}>
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
+                    {!pendientes.length && pendientesEditables && (
+                        <div className="ed-sinres">Nada. Para sumar mercadería ya facturada, buscala abajo y tocá «ya facturado».</div>
+                    )}
+                    {!pendientesDisponibles && pendientesOriginales !== null && !!pendientes.length && (
+                        <div className="ed-aviso"><AlertTriangle size={14} /><span>Todavía no se pueden cargar desde acá (falta aplicar la migración 055). Si hay que cambiarlos, hacelo en InfoManager.</span></div>
+                    )}
+                </div>
+            )}
+
             {/* ─── Agregar un producto ────────────────────────────────────────── */}
             <div className="ed-agregar">
                 <div className="ed-buscar">
@@ -376,11 +501,20 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                     <div className="ed-resultados">
                         {!resultados.length && <div className="ed-sinres">No encontré nada con eso.</div>}
                         {resultados.map(a => (
-                            <button key={a.cod_articulo} className="ed-res" onClick={() => agregar(a)}>
-                                <Plus size={13} />
-                                <span>{a.descripcion}</span>
-                                <small>#{a.cod_articulo}{a.precio_venta != null ? ` · ${money(a.precio_venta)}` : ''}</small>
-                            </button>
+                            <div key={a.cod_articulo} className="ed-res-fila">
+                                <button className="ed-res" onClick={() => agregar(a)}>
+                                    <Plus size={13} />
+                                    <span>{a.descripcion}</span>
+                                    <small>#{a.cod_articulo}{a.precio_venta != null ? ` · ${money(a.precio_venta)}` : ''}</small>
+                                </button>
+                                {/* El mismo buscador sirve para lo que viaja sin cobrarse. */}
+                                {pendientesEditables && (
+                                    <button className="ed-btn ghost chico ed-res-pend" title="Mercadería ya facturada que viaja con este pedido: no se cobra"
+                                            onClick={() => agregarPendiente(a)}>
+                                        <Truck size={12} /> ya facturado
+                                    </button>
+                                )}
+                            </div>
                         ))}
                     </div>
                 )}
@@ -430,7 +564,7 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                 <button className="ed-btn ghost chico" onClick={() => { if (!operacion.enCurso.current) onCancelar(); }} disabled={guardando}>Cerrar</button>
                 <button className="ed-btn chico" onClick={() => void guardar()} disabled={guardando || !hayCambios || !!porCotizar.length}>
                     {guardando ? <Loader2 size={14} className="ed-girando" /> : <Save size={14} />}
-                    {seRecrea ? ' Guardar (rehace el presupuesto)' : ' Guardar cantidades'}
+                    {seRecrea ? ' Guardar (rehace el presupuesto)' : soloPendientes ? ' Guardar' : ' Guardar cantidades'}
                 </button>
             </div>
         </fieldset>

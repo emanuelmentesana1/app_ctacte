@@ -17,7 +17,11 @@ import './ImprimirHoja.css';
  *     cada cantidad separada: cada una es un paquete a preparar.
  */
 
-interface Comprobante { factura_origen?: string; im_numero: number | null; im_remito_numero?: number | null; bultos: number; kg: number; total: number; facturado: boolean }
+interface Comprobante {
+    factura_origen?: string; im_numero: number | null; im_remito_numero?: number | null; bultos: number; kg: number; total: number; facturado: boolean;
+    /** Mercadería ya facturada que viaja con esta entrega (01/10/2026): se entrega, no se cobra. */
+    pendientes?: Array<{ descripcion: string; cantidad: number; factura_ref?: string | null }>;
+}
 /**
  * 🔴 Las notas de crédito y débito de ESTA entrega. Mati (10/09/2026): *"la NC de Baca tiene que
  * impactar en el importe total que se le va a entregar en ese pedido"*. El total del cliente ya
@@ -132,8 +136,11 @@ export function ImprimirHoja({ hojaId, onClose }: { hojaId: string; onClose: () 
                             Antes iban todas en un <tbody> con fragments sin key. */}
                         {datos.clientes.map(c => {
                             const notas = c.notas ?? [];
+                            const pendientes = c.comprobantes.flatMap(x => x.pendientes ?? []);
                             // Las notas ocupan su propia fila: el rowSpan del total tiene que contarlas.
                             const filas = c.comprobantes.length + notas.length;
+                            // 🪤 Lo que lleva sin cobrar es una fila más del alto, pero NO un pedido más.
+                            const alto = filas + (pendientes.length ? 1 : 0);
                             return (
                             <tbody className="imp-grupo" key={`${c.cod_empresa ?? "?"}|${c.cod_cliente}`}>
                                 {c.comprobantes.map((x, i) => (
@@ -146,7 +153,7 @@ export function ImprimirHoja({ hojaId, onClose }: { hojaId: string; onClose: () 
                                             que el repartidor tiene que cobrar en esa puerta, sin sumar
                                             nada de cabeza. Con `rowSpan` no se puede repetir por error. */}
                                         {i === 0 && (
-                                            <td className="n total-cli" rowSpan={filas}>
+                                            <td className="n total-cli" rowSpan={alto}>
                                                 {money(c.total)}
                                                 {filas > 1 && <span className="imp-cuantos"> ({filas} pedidos)</span>}
                                             </td>
@@ -155,7 +162,7 @@ export function ImprimirHoja({ hojaId, onClose }: { hojaId: string; onClose: () 
                                         {/* El saldo anterior YA IMPRESO: es lo que hoy escriben a mano
                                             antes de que salga el camión. Uno por cliente, como el total. */}
                                         {i === 0 && (
-                                            <td className="n saldo" rowSpan={filas}>
+                                            <td className="n saldo" rowSpan={alto}>
                                                 {/* 🪤 "—" en el papel se lee como "no debe nada". BUSTOS Sebastián,
                                                     hoja 3430 (24/09/2026): salió así y debía $1.368.965. */}
                                                 {c.saldo_anterior != null ? money(c.saldo_anterior) : 'SIN DATO'}
@@ -176,6 +183,18 @@ export function ImprimirHoja({ hojaId, onClose }: { hojaId: string; onClose: () 
                                         <td className="n escribir"></td>
                                     </tr>
                                 ))}
+                                {/* 🔑 Mercadería ya facturada que va en el camión (Mati, 01/10/2026):
+                                    el repartidor la entrega pero NO la cobra. Sin esta fila no sabía que la llevaba. */}
+                                {pendientes.length > 0 && (
+                                    <tr className="imp-pendiente">
+                                        <td></td>
+                                        <td colSpan={3}>
+                                            <b>Lleva además, ya facturado (no se cobra):</b>{' '}
+                                            {pendientes.map(x => `${num(Number(x.cantidad))} ${x.descripcion}${x.factura_ref ? ` (${x.factura_ref})` : ''}`).join(' · ')}
+                                        </td>
+                                        <td></td>
+                                    </tr>
+                                )}
                             </tbody>
                             );
                         })}

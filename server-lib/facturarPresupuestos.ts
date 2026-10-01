@@ -50,6 +50,7 @@ import { usuarioIM } from './pedidos.js';
 import { vistaDeRango, invalidarVista } from './vistaPresupuestos.js';
 import { renglonesQueFaltan } from './remitoSigueALaFactura.js';
 import { totalDeRenglones } from './totalFacturado.js';
+import { pasarPendientesDeIM } from './pendientesEntrega.js';
 // Emitir crea los remitos: la pantalla de hojas los tiene que ver ya mismo.
 import { invalidarRemitos } from './vistaRemitos.js';
 
@@ -1258,6 +1259,8 @@ export async function facturarSeleccion(req: Request & { user?: JwtPayload }, re
       const quien = `${f.cliente_nombre ?? 'cliente ' + f.cod_cliente} (PR ${f.im_numero ?? f.im_comprobante_id})`;
 
       let control: string | null = null;
+      /** Si lo que viaja sin cobrarse no se pudo pasar a la app (ver abajo): se avisa al final. */
+      let errorPendientes: string | null = null;
       try {
         control = await bloquearPresupuesto(String(f.im_comprobante_id), 'facturar');
       } catch (e: any) { fallados.push(`${quien}: ${e.message}`); continue; }
@@ -1334,6 +1337,14 @@ export async function facturarSeleccion(req: Request & { user?: JwtPayload }, re
             observaciones: [`Pedido ${f.im_numero ?? ''}`, String(cabActual.observaciones ?? '').trim()].filter(Boolean).join(' - ').slice(0, MAX_OBSERVACIONES) };
           base.total = p.datos.total;
         } catch (e: any) { fallados.push(`${quien}: ${e.message}`); continue; }
+        /**
+         * 🔑 LO QUE VIAJA SIN COBRARSE (Mati, 01/10/2026): los renglones a mano en $0 no entran en
+         * la factura ni en el remito —la API no los acepta—, así que pasan a la app, que es de
+         * donde los leen el remito impreso y la hoja de ruta. Repetirlo no duplica. Si falla, se
+         * factura igual y se avisa: frenar la factura por esto sería peor que el papel sin ellos.
+         */
+        const pase = await pasarPendientesDeIM(String(f.im_comprobante_id), itemsActuales, req.user?.sub ?? null);
+        if (pase.error) errorPendientes = pase.error;
         f.claim_token = randomUUID();
         // 🔴 RECLAMO. El rol administrativo lo tienen dos personas: si las dos aprietan Facturar
         // sobre la misma selección, las dos leen "no está facturado" y las dos emiten. La fila se
@@ -1391,6 +1402,7 @@ export async function facturarSeleccion(req: Request & { user?: JwtPayload }, re
         if (!cerrado.ok) { fallados.push(`${quien}: ${cerrado.error}`); cortado = `${quien}: ${cerrado.error} Se frenó el resto.`; continue; }
         if (cerrado.aviso) fallados.push(`⚠️ ${quien}: ${cerrado.aviso}`);
         await cerrarCircuito(f);
+        if (errorPendientes) fallados.push(`⚠️ ${quien}: se facturó, pero no pude pasar a la app lo que lleva sin cobrar (${errorPendientes}): no va a salir en el remito impreso ni en la hoja de ruta.`);
         hechos.push({ cliente: f.cliente_nombre, factura: facturaNumero, remito: f.im_remito_numero, tipo: tipoFactura });
         continue;
       }
@@ -1558,6 +1570,7 @@ export async function facturarSeleccion(req: Request & { user?: JwtPayload }, re
       // 3) El presupuesto sale de la ventana de la oficina y el pedido del vendedor se marca.
       await cerrarCircuito(f);
 
+      if (errorPendientes) fallados.push(`⚠️ ${quien}: se facturó, pero no pude pasar a la app lo que lleva sin cobrar (${errorPendientes}): no va a salir en el remito impreso ni en la hoja de ruta.`);
       hechos.push({ cliente: f.cliente_nombre, factura: facturaNumero, remito: re.numero, tipo: tipoFactura });
       } finally { if (control) await desbloquearPresupuesto(String(f.im_comprobante_id), control); }
     }

@@ -16,6 +16,7 @@ import {
 import { ausentesADudar, corregirConStockPuntual } from './stockCatalogo.js';
 import type { JwtPayload } from './auth.js';
 import { formatosDeBolsa } from './formatosBolsa.js';
+import { leerPendientes } from './pendientesEntrega.js';
 import {
   clasificarArticulo, evaluarPedido,
   type ArticuloInfo, type ReglaLista, type ReglaDescuento, type ResultadoPedido,
@@ -802,6 +803,22 @@ export async function editarPedido(req: Request & { user?: JwtPayload }, res: Re
       // único que después permite preguntarle "¿creaste este presupuesto?" en vez de quedarse
       // sin saber (ver reconciliarSinRespuesta). Si el update falla no se corta: perder la
       // reconciliación es peor que no editar, pero mucho menos grave que no crear el pedido.
+      /**
+       * 🔴 LO QUE LA OFICINA CARGÓ A MANO NO SE PIERDE EN SILENCIO (01/10/2026). Rehacer el
+       * presupuesto borra los renglones escritos a mano en IM —la API no los vuelve a escribir—
+       * y dejaría lo ya facturado que viaja con el pedido colgado del presupuesto anulado (ver
+       * `pendientesEntrega.ts`). Desde el panel la oficina lo cambia sin perder nada.
+       */
+      if (!sinPresupuesto) {
+        const aMano = yaAnulado || noExiste ? []
+          : (await getItemsComprobante(pedido.im_presupuesto_id)).filter((it: any) => !(Number(it.cod_articulo) > 0));
+        const enLaApp = (await leerPendientes([String(pedido.im_presupuesto_id)]))?.get(String(pedido.im_presupuesto_id)) ?? [];
+        if (aMano.length || enLaApp.length) {
+          const que = [...enLaApp.map(p => p.descripcion), ...aMano.map((it: any) => String(it.detalle ?? '').trim() || 'renglón escrito a mano')];
+          res.status(409).json({ error: `Este pedido lleva cosas que la oficina cargó a mano (${que.map(q => `"${q}"`).join(', ')}) y rehacerlo las borraría. Pedile a la oficina que haga el cambio desde el panel.` });
+          return;
+        }
+      }
       const codCompat = randomUUID().slice(0, 8);
       const { error: errCompat } = await sb().from('pedidos_vendedor')
         .update({ im_cod_compatibilidad: codCompat }).eq('tenant_id', TENANT_ID).eq('id', pedido.id);

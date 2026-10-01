@@ -1546,3 +1546,42 @@ describe('a quién se le pregunta si sigue vigente', () => {
   });
 });
 
+
+describe('lo que viaja sin cobrarse (01/10/2026)', () => {
+  /**
+   * 🔑 Un renglón escrito a mano en IM en $0 —mercadería ya facturada que va en este camión— no
+   * entra en la factura ni en el remito (la API no lo acepta). Al facturar pasa a la app, que es de
+   * donde lo leen el remito impreso y la hoja de ruta.
+   */
+  const PENDIENTE_IM = { id: 5001, id_comprobante: '10', cod_articulo: 0, cantidad: 300, precio: 0, precio_orig: 1, descuento_porc: 100, iva_por: 0, detalle: 'MEZCLA GALLO PREM' };
+  beforeEach(() => {
+    // Un test de más arriba deja /ventas sin contestar (mockRejectedValue no se limpia solo).
+    m.fetchVentas.mockResolvedValue([]);
+    m.getItemsComprobante.mockImplementation(async (id: string) => String(id) === '10' ? [RENGLON, PENDIENTE_IM] : [RENGLON_FA]);
+    m.fetchVentasItems.mockResolvedValue([RENGLON, { ...PENDIENTE_IM, cod_articulo: '' }, RENGLON_FA]);
+  });
+
+  it('🔑 al facturar pasa a la app, atado al presupuesto, sin duplicarse en un reintento', async () => {
+    const r = await llamar(facturarSeleccion, { body: { ids: ['10'] } });
+    expect(r.body.hechos).toHaveLength(1);
+    const pase = escrituras.find(e => e.tabla === 'pendientes_entrega' && e.op === 'upsert');
+    expect(pase).toBeTruthy();
+    expect(pase!.valor).toEqual([expect.objectContaining({ im_comprobante_id: '10', im_renglon_id: '5001', descripcion: 'MEZCLA GALLO PREM', cantidad: 300 })]);
+    // Avisar que no salió sería mentir: salió todo.
+    expect(r.body.fallados.join(' ')).not.toMatch(/sin cobrar/);
+  });
+
+  it('🔴 si no se puede pasar, se factura igual y se AVISA: no va a salir en el remito', async () => {
+    tablas['pendientes_entrega'] = { data: null, error: { message: 'tabla caída' } };
+    const r = await llamar(facturarSeleccion, { body: { ids: ['10'] } });
+    expect(r.body.hechos).toHaveLength(1);
+    expect(r.body.fallados.join(' ')).toMatch(/no va a salir en el remito impreso/);
+  });
+
+  it('un presupuesto sin renglones a mano no escribe nada de esto', async () => {
+    m.getItemsComprobante.mockResolvedValue([RENGLON_FA]);
+    m.fetchVentasItems.mockResolvedValue([RENGLON, RENGLON_FA]);
+    await llamar(facturarSeleccion, { body: { ids: ['10'] } });
+    expect(escrituras.find(e => e.tabla === 'pendientes_entrega')).toBeUndefined();
+  });
+});

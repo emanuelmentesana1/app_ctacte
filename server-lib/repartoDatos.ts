@@ -4,6 +4,7 @@ import { pesoDeRenglones, type RenglonPesable } from './pesoComprobante.js';
 import { itemsPorFechas } from './itemsRango.js';
 import { aparearFacturas } from './aparearFactura.js';
 import { fetchVentas, fetchArticulosCatalogo, fetchClientesIMCached } from './infomanager.js';
+import { leerPendientes, pesoDePendientes, pendientesParaMostrar } from './pendientesEntrega.js';
 
 export class ErrorReparto extends Error {
   constructor(message: string, public status = 409) { super(message); }
@@ -270,12 +271,60 @@ export async function enriquecerEntregas(filas: any[], actualizar = false, consu
       im_remito_numero: e?.im_remito_numero ?? f.im_remito_numero,
       facturado_at: e?.facturado_at ?? f.facturado_at,
       tipo_comprobante: f.tipo_comprobante ?? (String(f.im_comprobante_id) === String(e?.im_remito_id ?? f.im_remito_id) ? 'RE' : null),
+      // El presupuesto del que salió: de ahí cuelga lo que viaja sin cobrarse.
+      im_presupuesto_id: e?.im_comprobante_id != null ? String(e.im_comprobante_id) : null,
     };
   });
+  const pendientes = pendientesDeEntregas(enriquecidas);
   // Una hoja cerrada conserva su base histórica: ni el importe ni el peso se vuelven a mirar.
-  if (!consultarImportes) return enriquecidas;
+  if (!consultarImportes) return conPendientes(enriquecidas, await pendientes, false);
   const conPeso = conPesoDeIM(enriquecidas, await renglonesDeEntregas(enriquecidas, actualizar));
-  return actualizarImportesFacturas(conPeso, { actualizar, tolerarErrores });
+  return actualizarImportesFacturas(conPendientes(conPeso, await pendientes, true), { actualizar, tolerarErrores });
+}
+
+/**
+ * 🔑 LO QUE VIAJA SIN COBRARSE CON CADA ENTREGA (Mati, 01/10/2026; ver `pendientesEntrega.ts`).
+ * Se busca por el presupuesto del que salió el remito. Sin esto la hoja no sabía que el camión
+ * lleva además la mercadería ya facturada: ni la lista ni su peso.
+ *
+ * 🪤 Se lee en paralelo con los renglones de IM y, si no contesta, la hoja abre igual sin ellos:
+ * es la pantalla con la que se arma el camión.
+ */
+async function pendientesDeEntregas(filas: any[]): Promise<{ porPresupuesto: Map<string, any[]> | null; cat: Map<number, any> }> {
+  const ids = [...new Set(filas.map(f => f.im_presupuesto_id).filter(Boolean).map(String))];
+  if (!ids.length) return { porPresupuesto: null, cat: new Map() };
+  try {
+    const porPresupuesto = await leerPendientes(ids);
+    // El catálogo sólo hace falta para pesar, y casi ninguna entrega lleva pendientes.
+    const cat = porPresupuesto?.size ? await fetchArticulosCatalogo().catch(() => new Map()) : new Map();
+    return { porPresupuesto, cat };
+  } catch (e: any) {
+    console.warn('[hojas] sin pendientes de entrega:', e?.message);
+    return { porPresupuesto: null, cat: new Map() };
+  }
+}
+
+/**
+ * Pega la lista a cada entrega y, si `sumarPeso`, sus bultos y kilos. 🪤 Sólo se suma sobre un peso
+ * RECALCULADO contra IM (`kg_snapshot` presente): el respaldo guardado al armar la hoja ya los trae.
+ */
+export function conPendientes<T extends Record<string, any>>(
+  filas: T[], datos: { porPresupuesto: Map<string, any[]> | null; cat: Map<number, any> }, sumarPeso: boolean,
+): T[] {
+  if (!datos.porPresupuesto) return filas;
+  return filas.map(f => {
+    const ps = f.im_presupuesto_id ? datos.porPresupuesto!.get(String(f.im_presupuesto_id)) ?? [] : [];
+    if (!ps.length) return f;
+    const peso = pesoDePendientes(ps, datos.cat);
+    const fila: any = { ...f, pendientes: pendientesParaMostrar(ps), peso_pendientes: peso };
+    if (sumarPeso && f.kg_snapshot !== undefined) {
+      fila.bultos = Math.round((Number(f.bultos ?? 0) + peso.bultos) * 100) / 100;
+      fila.kg = Math.round((Number(f.kg ?? 0) + peso.kg) * 100) / 100;
+      fila.renglones_sin_peso = Number(f.renglones_sin_peso ?? 0) + peso.renglones_sin_peso;
+      fila.peso_completo = fila.renglones_sin_peso === 0;
+    }
+    return fila;
+  });
 }
 
 /**

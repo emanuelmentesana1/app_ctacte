@@ -219,6 +219,111 @@ try {
       assert(await page.locator('.pr-detalle .ed-cant').inputValue()==='7','Se perdió el borrador al cambiar de subsección');
     } finally { await ctx.close(); }
   });
+  /**
+   * 🔑 01/10/2026 — CARDENES, PR 59080: mercadería ya facturada escrita a mano en IM ("MEZCLA GALLO
+   * PREM", $0). Mati eligió que la guarde la app: se ve aparte, se carga con el mismo buscador y
+   * guardar sólo eso no toca InfoManager.
+   */
+  const conPendientes=(extra={})=>({items:[item(11,'PRODUCTO ALFA')],comprobante:{im_comprobante_id:'101',numero:101,cod_cliente:101,cliente_nombre:'CLIENTE ALFA',fecha:'2026-09-10',huella:'v101'},
+    pendientes:[{id:null,im_renglon_id:'5001',cod_articulo:null,descripcion:'MEZCLA GALLO PREM',cantidad:300,factura_ref:null,origen:'im'}],pendientes_disponibles:true,pendientes_error:null,...extra});
+  await test('Lo ya facturado va aparte, se carga con el buscador y guardarlo no toca InfoManager', async()=>{
+    const {page,ctx}=await setup();
+    try {
+      await page.route('**/api/presupuestos?**',r=>reply(r,presupuestos([{...row('101','CLIENTE ALFA'),pendientes:[{descripcion:'MEZCLA GALLO PREM',cantidad:300,origen:'im'}]},row('102','CLIENTE BETA')])));
+      await page.route('**/api/presupuestos/101',r=>reply(r,conPendientes()));
+      await page.route('**/api/articulos/buscar?**',r=>reply(r,{ok:true,articulos:[{cod_articulo:491,descripcion:'MEZCLA GALLO PREMIUM',unidad_de_medida:null,equivalencia_um:1,precio_venta:1330}]}));
+      let saved=null,dialogos=0;
+      await page.route('**/api/presupuestos/101/editar',async r=>{saved=r.request().postDataJSON();await reply(r,{ok:true,modo:'pendientes',im_numero:101});});
+      page.on('dialog',d=>{dialogos++;d.accept();});
+      // En la fila, sin abrirla: quien arma el pedido tiene que verlo. (La lista ya cargó: se actualiza.)
+      await page.locator('.pr-top').getByRole('button',{name:/Actualizar/}).click();
+      await page.locator('.pr-pendientes').first().waitFor();
+      assert(/Lleva además, ya facturado: 300 MEZCLA GALLO PREM/.test(await page.locator('.pr-pendientes').first().innerText()),'La fila no muestra lo que lleva sin cobrar');
+      await page.locator('.pr-abrir').nth(0).click();
+      await page.locator('.ed-pendientes').waitFor();
+      assert(/MEZCLA GALLO PREM/.test(await page.locator('.ed-pend-tabla').innerText()),'No se ve el renglón escrito en IM');
+      assert(/en InfoManager/.test(await page.locator('.ed-pend-tabla').innerText()),'No dice que está escrito en InfoManager');
+      assert(!/MEZCLA GALLO PREM/.test(await page.locator('.ed-tabla:not(.ed-pend-tabla)').innerText()),'Lo ya facturado aparece entre los renglones que se cobran');
+      await page.locator('.ed-buscar input').fill('gallo');
+      await page.locator('.ed-buscar input').press('Enter');
+      await page.locator('.ed-res-pend').first().click();
+      await page.locator('input[aria-label="Cantidad ya facturada de MEZCLA GALLO PREMIUM"]').fill('150');
+      await page.locator('input[aria-label="Factura de MEZCLA GALLO PREMIUM"]').fill('FA B 50680');
+      assert(!await page.getByText('Al guardar se',{exact:false}).isVisible(),'Sumar algo ya facturado no tiene por qué rehacer el presupuesto');
+      const boton=page.locator('.pr-detalle .ed-pie button').last();
+      assert(/^\s*Guardar\s*$/.test(await boton.innerText()),`El botón dice "${await boton.innerText()}"`);
+      await page.screenshot({path:`${out}/pendientes-editor.png`,fullPage:true});
+      await boton.click();
+      await page.waitForTimeout(200);
+      assert(dialogos===0,'Pidió confirmar algo que no rehace nada');
+      assert(saved,'No se guardó');
+      assert(saved.items.length===1&&saved.items[0].cod_articulo===11,'Mandó los pendientes como renglones a facturar');
+      assert(JSON.stringify(saved.pendientes)===JSON.stringify([
+        {id:null,im_renglon_id:'5001',cod_articulo:null,descripcion:'MEZCLA GALLO PREM',cantidad:300,factura_ref:null,origen:'im'},
+        {id:null,im_renglon_id:null,cod_articulo:491,descripcion:'MEZCLA GALLO PREMIUM',cantidad:150,factura_ref:'FA B 50680',origen:'app'},
+      ]),`Lista mal armada: ${JSON.stringify(saved.pendientes)}`);
+      await page.getByText('se guardó lo que lleva sin cobrar',{exact:false}).waitFor();
+      await page.screenshot({path:`${out}/pendientes-guardado.png`,fullPage:true});
+    } finally { await ctx.close(); }
+  });
+  await test('Tocar lo escrito en InfoManager avisa ANTES que se rehace el presupuesto', async()=>{
+    const {page,ctx}=await setup();
+    try {
+      await page.route('**/api/presupuestos/101',r=>reply(r,conPendientes()));
+      let saved=null,mensaje='';
+      await page.route('**/api/presupuestos/101/editar',async r=>{saved=r.request().postDataJSON();await reply(r,{ok:true,modo:'recreado',im_numero:59400});});
+      page.on('dialog',d=>{mensaje=d.message();d.accept();});
+      await page.locator('.pr-abrir').nth(0).click();
+      await page.locator('input[aria-label="Cantidad ya facturada de MEZCLA GALLO PREM"]').fill('200');
+      await page.getByText('Al guardar se',{exact:false}).waitFor();
+      await page.locator('.pr-detalle .ed-pie button').last().click();
+      await page.waitForTimeout(200);
+      assert(/pasa a la app/.test(mensaje),`La confirmación no dice que lo escrito en IM pasa a la app: "${mensaje}"`);
+      assert(saved?.pendientes?.[0]?.cantidad===200&&saved.pendientes[0].origen==='im','No viajó el cambio de lo escrito en IM');
+    } finally { await ctx.close(); }
+  });
+  await test('Si no se pudo leer lo ya facturado, guardar no manda una lista vacía', async()=>{
+    const {page,ctx}=await setup();
+    try {
+      await page.route('**/api/presupuestos/101',r=>reply(r,conPendientes({pendientes:null,pendientes_disponibles:false,pendientes_error:'No pude leer lo que lleva sin cobrar: corte simulado'})));
+      let saved=null;
+      await page.route('**/api/presupuestos/101/editar',async r=>{saved=r.request().postDataJSON();await reply(r,{ok:true,modo:'cantidades',im_numero:101});});
+      await page.locator('.pr-abrir').nth(0).click();
+      await page.getByText('corte simulado',{exact:false}).waitFor();
+      assert(!await page.locator('.ed-res-pend').count(),'Ofrece cargar sin haber podido leer la lista');
+      await page.locator('.pr-detalle .ed-cant').fill('3');
+      await page.locator('.pr-detalle .ed-pie button').last().click();
+      await page.waitForTimeout(200);
+      assert(saved&&!('pendientes' in saved),`Mandó una lista que no leyó: ${JSON.stringify(saved?.pendientes)}`);
+    } finally { await ctx.close(); }
+  });
+  await test('La hoja impresa dice qué lleva sin cobrar y no rompe el total del cliente', async()=>{
+    const {page,ctx}=await setup();
+    try {
+      const h={version:1,id:'h1',numero:3450,fecha:'2026-10-02',turno:'Mañana',camion:'Camión 5000',camion_id:'c1',capacidad_kg:5000,chofer:'Chofer auditoría',chofer_id:'ch1',estado:'abierta',facturada:true,pedidos:rows.map(x=>({...x,saldo_anterior:25000,im_remito_numero:5000,im_factura_numero:4000,facturado_at:'2026-10-02'})),totales:{pedidos:2,bultos:20,kg:600},carga:{porcentaje:12,excedido:false,sobra_kg:4400}};
+      await page.route('**/api/hojas-ruta?**',r=>reply(r,{hojas:[h]}));
+      const clientes=[
+        {cod_empresa:1,cod_cliente:742,cliente_nombre:'CARDENES, Walter (Alberdi)',saldo_anterior:25000,total:1044690.4,bultos:330,kg:700,
+          comprobantes:[{im_numero:78400,im_remito_numero:78400,bultos:330,kg:700,total:1044690.4,facturado:true,
+            pendientes:[{descripcion:'MEZCLA GALLO PREMIUM',cantidad:300,factura_ref:'FA B 50680'},{descripcion:'MAIZ LEALES 25 PENDIENTE',cantidad:10,factura_ref:null}]}]},
+        {cod_empresa:1,cod_cliente:5,cliente_nombre:'OTRO CLIENTE',saldo_anterior:0,total:150000,bultos:10,kg:300,comprobantes:[{im_numero:78401,bultos:10,kg:300,total:150000,facturado:true}]},
+      ];
+      await page.route('**/api/hojas-ruta/h1/impresion',r=>reply(r,{hoja:h,clientes,totales:{clientes:2,comprobantes:2,bultos:340,kg:1000,total:1194690.4},fraccionado:[],fraccionado_completo:true,dias_faltantes:[],fraccionado_totales:{productos:0,paquetes:0,kg:0},sin_saldo:0}));
+      await page.locator('.of-tabs button').filter({hasText:'Hojas de ruta'}).click();
+      await page.locator('.hr-hoja').waitFor();
+      await page.getByTitle('Imprimir la hoja y el listado de fraccionado',{exact:true}).click();
+      await page.locator('.imp-pendiente').waitFor();
+      const fila=await page.locator('.imp-pendiente').innerText();
+      assert(/Lleva además, ya facturado \(no se cobra\)/.test(fila),`Falta el rótulo: "${fila}"`);
+      assert(/300 MEZCLA GALLO PREMIUM \(FA B 50680\)/.test(fila)&&/10 MAIZ LEALES 25 PENDIENTE/.test(fila),`Falta lo que lleva: "${fila}"`);
+      assert(await page.locator('.imp-pendiente').count()===1,'Sale en un cliente que no lleva nada');
+      // El total y el saldo del cliente siguen siendo UNA celda que abarca también esta fila.
+      const span=await page.locator('.imp-grupo').first().locator('td.total-cli').getAttribute('rowspan');
+      assert(span==='2',`El total del cliente no abarca la fila nueva (rowspan ${span})`);
+      assert(!/pedidos/.test(await page.locator('.imp-grupo').first().locator('td.total-cli').innerText()),'Cuenta la fila de lo ya facturado como otro pedido');
+      await page.screenshot({path:`${out}/hoja-con-pendientes.png`,fullPage:true});
+    } finally { await ctx.close(); }
+  });
 } finally {
   await fs.writeFile(`${out}/browser-regresiones.json`,JSON.stringify(results,null,2));
   await browser.close();

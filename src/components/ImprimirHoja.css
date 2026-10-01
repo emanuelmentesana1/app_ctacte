@@ -185,3 +185,6 @@
 /* La nota de crédito o débito de la entrega: se lee como un renglón aparte del pedido. */
 .imp-nota td { font-style: italic; }
 .imp-nota td.c, .imp-nota td.n { font-weight: 700; }
+
+/* Lo que viaja sin cobrarse (01/10/2026): una fila más del cliente, chica y sin importe. */
+.imp-pendiente td { font-size: 0.85em; }

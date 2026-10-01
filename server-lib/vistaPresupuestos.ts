@@ -27,6 +27,7 @@ import { avisosDeListaPorPedido } from './listasPorCliente.js';
 import { reglasActivas, descuentosActivos, catalogoParaListas } from './pedidos.js';
 import { esPedidoInternoDeSucursal } from './pedidosInternos.js';
 import { EVIDENCIA, proyectarEvidencia } from './evidenciaComprobantes.js';
+import { esPendienteDeIM, leerPendientes, unirPendientes, pesoDePendientes, pendientesParaMostrar } from './pendientesEntrega.js';
 
 /** Depósito contra el que se controla el stock. 1 = Depósito General (Casa Central). */
 const DEPOSITO_CONTROL = Number(process.env.PEDIDO_DEPOSITO || 1);
@@ -215,6 +216,17 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
     const stock = stockInicial ? await fetchStockPorDeposito(DEPOSITO_CONTROL, false, codigosControl).catch(() => stockInicial) : null;
     tIM = Date.now() - t0;
     const ids = presupuestos.map((p: any) => String(p.id));
+    /**
+     * 🔑 LO QUE VIAJA SIN COBRARSE no es parte del pedido para las listas, el stock ni el
+     * consolidado: ya se facturó y ya descontó stock (ver `pendientesEntrega.ts`). 🪤 Contado como
+     * renglón, el 100% de descuento con que se escribe en IM salía como "descuento fuera de tope"
+     * y el pedido quedaba "para revisar" sin nada que revisar (CARDENES, PR 59080, 01/10/2026).
+     */
+    const facturables = new Map([...renglones].map(([k, rs]) => [k, rs.filter(r => !esPendienteDeIM(r))]));
+    // Lo guardado en la app. Sin esto la pantalla abre igual: sólo se verían los escritos en IM.
+    const pendientesGuardados = leerPendientes(ids).catch((e: any) => {
+      console.warn('[vistaPresupuestos] sin pendientes de entrega:', e?.message); return null;
+    });
 
     /**
      * 🔑 LAS CONSULTAS A SUPABASE VAN EN PARALELO, NO UNA ATRÁS DE LA OTRA.
@@ -291,7 +303,7 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
        * El agrupado vive en `listasPorCliente.ts` para poder testearlo sin toda esta pantalla.
        */
       const r = avisosDeListaPorPedido(
-        presupuestos as any, renglones as any, catListas, reglas, descuentos, await formatosDeBolsa());
+        presupuestos as any, facturables as any, catListas, reglas, descuentos, await formatosDeBolsa());
       avisosPorPedido = r.avisos;
       gravedadPorPedido = r.gravedad;
     } catch (e: any) {
@@ -395,12 +407,21 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
 
     // Acá sí hacen falta: para este punto ya se trajeron los renglones y se leyó Supabase.
     const porCliente = new Map((await clientesPendientes).map((c: any) => [Number(c.cod_cliente), c]));
+    const guardadosPorId = await pendientesGuardados;
 
     const filas = presupuestos.map((p: any) => {
       const c = porCliente.get(Number(p.cod_cliente));
       const z = zonaDeCliente(c);
       const rs = renglones.get(String(p.id)) ?? [];
-      const peso = pesoDeRenglones(rs);
+      // 🔑 Lo que viaja sin cobrarse SÍ pesa en el camión: se suma aparte, con su artículo si lo tiene.
+      const pendientes = unirPendientes(guardadosPorId?.get(String(p.id)) ?? [], rs);
+      const pesoPedido = pesoDeRenglones(facturables.get(String(p.id)) ?? []);
+      const pesoPendientes = pesoDePendientes(pendientes, cat);
+      const peso = {
+        bultos: Math.round((pesoPedido.bultos + pesoPendientes.bultos) * 100) / 100,
+        kg: Math.round((pesoPedido.kg + pesoPendientes.kg) * 100) / 100,
+        renglones_sin_peso: pesoPedido.renglones_sin_peso + pesoPendientes.renglones_sin_peso,
+      };
       const propio = mio.get(String(p.id));
 
       // Lo que se pide y no está en el depósito. `stock === null` = no se pudo consultar, que
@@ -481,6 +502,8 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
         faltantes,
         avisos_cantidad: avisosCantidad.map(a => a.texto),
         stock_consultado: !!stock,
+        // La mercadería ya facturada que viaja con este pedido (de la app y la escrita en IM).
+        pendientes: pendientesParaMostrar(pendientes),
       };
     });
 
@@ -545,7 +568,7 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
           // "30 × MAIZ X 30 KG" = 900 kg: una cantidad así infla el total de su artículo.
           cantidad_dudosa: f.avisos_cantidad.length > 0,
         })),
-        renglones,
+        facturables,
         cat,
         stock,
       ),

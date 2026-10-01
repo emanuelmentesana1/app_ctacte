@@ -51,6 +51,9 @@ async function datosDelComprobante(
     dias_cta_cte: d.comprobante?.dias_cta_cte ?? null,
     fecha: d.comprobante?.fecha ?? new Date(),
     observaciones: d.comprobante?.observaciones ?? null,
+    // La mercadería ya facturada que viaja con el pedido (01/10/2026): va en el papel que se firma.
+    pendientes: d.pendientes ?? [],
+    aviso_pendientes: d.aviso_pendientes ?? null,
     items: d.items ?? [],
     valorizado,
   };

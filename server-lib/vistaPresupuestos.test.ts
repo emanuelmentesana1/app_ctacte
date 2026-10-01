@@ -485,3 +485,44 @@ describe('los renglones se piden sin esperar a las ventas', () => {
     expect(v.pendientes[0]?.kg).toBeGreaterThan(0);
   });
 });
+
+describe('lo que viaja sin cobrarse (01/10/2026)', () => {
+  /**
+   * CARDENES, PR 59080: "MEZCLA GALLO PREM" escrito a mano en IM, en $0 con el 100% de descuento
+   * —mercadería ya facturada que va en este camión—. Salía "para revisar" sin nada que revisar.
+   */
+  const ESCRITO_EN_IM = {
+    id_comprobante: '999', id: '5001', cod_articulo: '', cantidad: 300, cod_lista_precios: 12, descuento_porc: 100,
+    precio: 0, precio_orig: 1, importe: 0, iva_por: 0, detalle: 'MEZCLA GALLO PREM',
+  };
+
+  it('🔴 no es un "descuento fuera de tope": el pedido no queda para revisar', async () => {
+    m.descuentosActivos.mockResolvedValue([]);
+    m.fetchVentasItems.mockResolvedValue([...renglon(12), ESCRITO_EN_IM]);
+    const v = await vistaDeRango('2026-09-09', '2026-09-09', true);
+    expect(v.pendientes[0].avisos).toEqual([]);
+    expect(v.pendientes[0].gravedad).toEqual({ pierde_margen: 0, cobra_de_mas: 0 });
+  });
+
+  it('🔑 la fila los muestra —los de la app y los de IM— y suman al camión', async () => {
+    tablasSb.pendientes_entrega = [{ id: 'a1', im_comprobante_id: '999', cod_articulo: 1, descripcion: 'ALPISTE', cantidad: 2, orden: 0 }];
+    m.fetchVentasItems.mockResolvedValue([...renglon(12), ESCRITO_EN_IM]);
+    const v = await vistaDeRango('2026-09-09', '2026-09-09', true);
+    const fila = v.pendientes[0];
+    expect(fila.pendientes.map((p: any) => [p.descripcion, p.cantidad, p.origen])).toEqual([
+      ['ALPISTE', 2, 'app'], ['MEZCLA GALLO PREM', 300, 'im'],
+    ]);
+    // 1 bolsa del pedido + 2 bolsas ya facturadas (30 kg c/u) + 300 sin artículo (sin kilos).
+    expect(fila.bultos).toBe(303);
+    expect(fila.kg).toBe(90);
+    expect(fila.renglones_sin_peso).toBe(1);
+  });
+
+  it('🪤 lo ya facturado no compite por el stock en el consolidado', async () => {
+    tablasSb.pendientes_entrega = [{ id: 'a1', im_comprobante_id: '999', cod_articulo: 1, descripcion: 'ALPISTE', cantidad: 2, orden: 0 }];
+    m.fetchVentasItems.mockResolvedValue([...renglon(12), ESCRITO_EN_IM]);
+    const v = await vistaDeRango('2026-09-09', '2026-09-09', true);
+    // Del ALPISTE se pidió 1 bolsa: las 2 ya facturadas no cuentan como demanda.
+    expect(v.consolidado.articulos.map((x: any) => [Number(x.cod_articulo), x.pedido])).toEqual([[1, 1]]);
+  });
+});

@@ -145,3 +145,41 @@ describe('código de artículo en todos los comprobantes impresos',()=>{
   expect(txt).toContain('73125');expect(txt).toContain('Producto');
  });
 });
+
+describe('lo que viaja sin cobrarse va en el papel (01/10/2026)', () => {
+  /**
+   * 🔑 Mati eligió que la mercadería ya facturada que va con el pedido figure en el papel que firma
+   * el cliente: en su propio bloque, no como un renglón en $0.
+   */
+  const pendientes = [
+    { descripcion: 'MEZCLA GALLO PREMIUM', cantidad: 300, factura_ref: 'FA B 50680' },
+    { descripcion: 'MAIZ LEALES 25 PENDIENTE', cantidad: 10, factura_ref: null },
+  ];
+  const texto = async (d: DatosPresupuesto) => (await generarPresupuestoPdf(d).blob).text();
+
+  it('🔑 sale el bloque con cada cosa, cuánto y de qué factura', async () => {
+    const t = await texto({ ...base, tipo: 'Remito', pendientes });
+    expect(t).toMatch(/NO SE COBRA/);
+    // jsPDF escapa los paréntesis en el stream ("\(FA B 50680\)") y el "×" va como un byte
+    // Latin-1, que leído como UTF-8 no es "×": se acepta cualquier separador corto.
+    expect(t).toMatch(/300 .{1,3}MEZCLA GALLO PREMIUM \\\(FA B 50680\\\)/);
+    expect(t).toMatch(/MAIZ LEALES 25 PENDIENTE/);
+  });
+
+  it('también sin importes: el remito no valorizado es justo el que se firma al recibir', async () => {
+    expect(await texto({ ...base, tipo: 'Remito', valorizado: false, pendientes })).toMatch(/MEZCLA GALLO PREMIUM/);
+  });
+
+  it('🔴 si no se pudo consultar, el papel lo dice en vez de callarlo', async () => {
+    const t = await texto({ ...base, tipo: 'Factura', aviso_pendientes: 'No se pudo consultar si lleva mercadería ya facturada.' });
+    expect(t).toMatch(/No se pudo consultar si lleva/);
+  });
+
+  it('sin nada de esto, el papel queda como siempre', async () => {
+    expect(await texto({ ...base, tipo: 'Remito' })).not.toMatch(/NO SE COBRA/);
+  });
+
+  it('no le roba la hoja a un pedido que entraba justo', async () => {
+    expect(await paginas({ ...base, items: items(30), pendientes })).toBe(1);
+  });
+});

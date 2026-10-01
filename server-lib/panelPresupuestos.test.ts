@@ -349,3 +349,46 @@ it('detalle entrega identidad y cabecera completa de la misma lectura, sin recon
   expect(r.status).toBe(200); expect(r.body.comprobante).toMatchObject({ im_comprobante_id: '123', numero: 50234, cod_cliente: 1, cliente_nombre: 'CLIENTE VERIFICADO', fecha: '2026-09-11', observaciones: 'BASE ACTUAL' });
   expect(r.body.comprobante.huella).toMatch(/^[a-f0-9]{64}$/); expect(m.vistaDeRango).not.toHaveBeenCalled();
 });
+
+describe('el detalle y lo que viaja sin cobrarse (01/10/2026)', () => {
+  /** CARDENES, PR 59080: dos renglones escritos a mano en IM en $0, con el 100% de descuento. */
+  const CON_PENDIENTES = [
+    { id: 9, cantidad: 10, cod_articulo: 1, precio: 100 },
+    { id: 58955053, cantidad: 10, cod_articulo: 0, precio: 0, precio_orig: 1, descuento_porc: 100, detalle: 'MAIZ LEALES 25 PENDIENTE' },
+    { id: 58955066, cantidad: 300, cod_articulo: 0, precio: 0, precio_orig: 1, descuento_porc: 100, detalle: 'MEZCLA GALLO PREM' },
+  ];
+  beforeEach(() => {
+    m.cabeceraComprobante.mockResolvedValue({ tipo_comprobante: 'PR', cod_empresa: 1, cod_cliente: 1, existe: true, anulada: false, numero: 59080, fecha: '2026-10-02' });
+    m.getItemsComprobante.mockResolvedValue(CON_PENDIENTES);
+  });
+
+  it('🔑 van APARTE de los renglones: lo de la app primero y lo escrito en IM después', async () => {
+    tablas.pendientes_entrega = { data: [{ id: 'a1', im_comprobante_id: '123', cod_articulo: 2, descripcion: 'MIJO', cantidad: 5, factura_ref: 'FA B 50680', orden: 0 }], error: null };
+    const r = await llamar(detallePresupuesto, { params: { comprobanteId: '123' } });
+    expect(r.status).toBe(200);
+    expect(r.body.items.map((i: any) => i.id)).toEqual([9]);
+    expect(r.body.pendientes.map((p: any) => [p.descripcion, p.cantidad, p.origen])).toEqual([
+      ['MIJO', 5, 'app'], ['MAIZ LEALES 25 PENDIENTE', 10, 'im'], ['MEZCLA GALLO PREM', 300, 'im'],
+    ]);
+    expect(r.body.pendientes_disponibles).toBe(true);
+    // 🔑 La huella sigue siendo la de InfoManager entero: es contra lo que se compara al guardar.
+    expect(r.body.comprobante.huella).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('sin la migración 055 se ven los de IM, pero no se ofrece cargar', async () => {
+    tablas.pendientes_entrega = { data: null, error: { code: 'PGRST205', message: 'Could not find the table' } };
+    const r = await llamar(detallePresupuesto, { params: { comprobanteId: '123' } });
+    expect(r.status).toBe(200);
+    expect(r.body.pendientes.map((p: any) => p.origen)).toEqual(['im', 'im']);
+    expect(r.body.pendientes_disponibles).toBe(false);
+  });
+
+  it('🔴 si la base no contesta, la lista va en null: guardar no puede borrar lo que no se vio', async () => {
+    tablas.pendientes_entrega = { data: null, error: { code: '08006', message: 'connection failure' } };
+    const r = await llamar(detallePresupuesto, { params: { comprobanteId: '123' } });
+    expect(r.status).toBe(200);
+    expect(r.body.pendientes).toBeNull();
+    expect(r.body.pendientes_disponibles).toBe(false);
+    expect(r.body.pendientes_error).toMatch(/connection failure/);
+  });
+});

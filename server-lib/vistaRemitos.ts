@@ -29,6 +29,7 @@ import {
   fetchVentas, fetchVentasItems, fetchArticulosCatalogo, fetchClientesIMCached,
 } from './infomanager.js';
 import { pesoDeRenglones } from './pesoComprobante.js';
+import { leerPendientes, pesoDePendientes, pendientesParaMostrar } from './pendientesEntrega.js';
 import { zonaDeCliente } from './zonaCliente.js';
 import { aparearFacturas } from './aparearFactura.js';
 
@@ -222,10 +223,26 @@ async function armarVistaRemitos(desde: string, hasta: string, forzar = false) {
     if (hojas.size > 1 || (hojas.size > 0 && enRetiro.has(id))) ambiguos.add(id);
   }
 
+  /**
+   * 🔑 Lo que viaja sin cobrarse con cada remito (Mati, 01/10/2026; ver `pendientesEntrega.ts`):
+   * cuelga del presupuesto del que salió y va en el mismo camión, así que pesa al elegir. Si la base
+   * no contesta, la pantalla abre igual sin ellos.
+   */
+  const pendientesPorPresupuesto = await leerPendientes([...presupuestosPorRemito.values()].flatMap(ids => [...ids]))
+    .catch((e: any) => { console.warn('[vistaRemitos] sin pendientes de entrega:', e?.message); return null; });
   const bases = remitos.map((r: any) => {
     const c = porCliente.get(Number(r.cod_cliente));
     const z = zonaDeCliente(c);
-    const peso = pesoDeRenglones(renglones.get(String(r.id)) ?? []);
+    const origenes = [...presupuestosPorRemito.get(String(r.id)) ?? []];
+    // Con dos presupuestos de origen no se sabe de cuál es: no se adivina (ya sale como ambiguo).
+    const pendientes = origenes.length === 1 ? pendientesPorPresupuesto?.get(origenes[0]) ?? [] : [];
+    const pesoRemito = pesoDeRenglones(renglones.get(String(r.id)) ?? []);
+    const pesoPend = pesoDePendientes(pendientes, cat);
+    const peso = {
+      bultos: Math.round((pesoRemito.bultos + pesoPend.bultos) * 100) / 100,
+      kg: Math.round((pesoRemito.kg + pesoPend.kg) * 100) / 100,
+      renglones_sin_peso: pesoRemito.renglones_sin_peso + pesoPend.renglones_sin_peso,
+    };
     const fa = facturaDe.get(String(r.id));
     return {
       // 🔑 El comprobante que identifica la entrega es el REMITO: es el que viaja.
@@ -253,6 +270,7 @@ async function armarVistaRemitos(desde: string, hasta: string, forzar = false) {
       factura_origen: fa?.origen ?? 'ninguna',
       asignacion_ambigua: ambiguos.has(String(r.id)),
       comprobantes_origen: [...presupuestosPorRemito.get(String(r.id)) ?? []],
+      pendientes: pendientesParaMostrar(pendientes),
       hoja_id: enHoja.get(String(r.id)) ?? null,
       en_retiro: enRetiro.has(String(r.id)),
     };

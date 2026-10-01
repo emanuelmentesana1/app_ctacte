@@ -42,6 +42,10 @@ import { invalidarRemitos } from './vistaRemitos.js';
 import { verificarPreciosEditados } from './verificarPrecioEditado.js';
 import { usuariosPorCod } from './usuariosPorCod.js';
 import { vencimientoDeFactura } from './vencimientoFactura.js';
+import {
+  esPendienteDeIM, unirPendientes, leerPendientes, validarPendientes, firmaPendientes,
+  guardarPendientes, pendientesParaMostrar, ErrorPendientes, MSJ_FALTA_MIGRACION, type Pendiente,
+} from './pendientesEntrega.js';
 
 function frenaSiNoPuede(req: Request & { user?: JwtPayload }, res: Response): boolean {
   if (!puedeArmarHojasDeRuta(String(req.user?.rol ?? ''))) {
@@ -185,12 +189,47 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
 
     exigirHuella(req.body?.huella, huellaPresupuesto(id, cab, imItems));
     /**
-     * 🪤 Si el presupuesto trae renglones SIN artículo (notas que escribe la oficina desde el
-     * sistema de IM, con `cod_articulo: ""`), recrearlo los perdería: la API no los puede volver
-     * a escribir. Se deja corregir cantidades —que no los toca— y se frena lo demás, en vez de
-     * borrarle una nota sin avisar.
+     * 🪤 Si el presupuesto trae renglones SIN artículo CON importe (un flete escrito a mano desde
+     * el sistema de IM), recrearlo los perdería: la API no los puede volver a escribir. Se deja
+     * corregir cantidades —que no los toca— y se frena lo demás, en vez de borrarlos sin avisar.
+     *
+     * 🔄 01/10/2026: los que van en $0 son otra cosa —mercadería ya facturada que viaja con este
+     * pedido— y ésos YA NO frenan: pasan a la app (ver `pendientesEntrega.ts`).
      */
-    const notasIM = imItems.filter(i => !(i.cod_articulo > 0));
+    const notasIM = imItems.filter(i => !(i.cod_articulo > 0) && !esPendienteDeIM(i));
+    /**
+     * 🔑 LO QUE VIAJA SIN COBRARSE. Mati (01/10/2026), por CARDENES (PR 59080): la app se negaba a
+     * agregarle un producto porque rehacerlo borraba "MAIZ LEALES 25 PENDIENTE" y "MEZCLA GALLO
+     * PREM", escritos a mano en IM. Ahora la lista la guarda la app y viaja con el presupuesto.
+     *
+     * `pendientes` ausente = pantalla vieja: no se tocan, y si hay que rehacer se conservan todos.
+     */
+    let deseados: Pendiente[] | null = null;
+    if (req.body?.pendientes !== undefined) {
+      const v = validarPendientes(req.body.pendientes);
+      if (!v.ok) { res.status(400).json({ error: v.error }); return; }
+      deseados = v.lista;
+    }
+    // `null` = falta la migración 055: sin tabla no hay dónde ponerlos.
+    const guardadosPorId = await leerPendientes([id]);
+    const guardados = guardadosPorId?.get(id) ?? [];
+    // Los que siguen escritos sólo en IM (los ya pasados a la app no cuentan dos veces).
+    const soloEnIM = unirPendientes(guardados, imItems).filter(p => p.origen === 'im');
+    const esDeIM = (p: Pendiente) => p.origen === 'im' && !!p.im_renglon_id && soloEnIM.some(e => e.im_renglon_id === p.im_renglon_id);
+    /**
+     * Los de IM que la pantalla devuelve TAL CUAL se quedan en IM. Si sacó o cambió alguno, la
+     * única forma de que salga de InfoManager es rehacer el presupuesto, y ahí pasan a la app.
+     */
+    const cambianLosDeIM = deseados != null && (() => {
+      const vuelven = deseados.filter(esDeIM);
+      if (vuelven.length !== soloEnIM.length) return true;
+      return vuelven.some(p => {
+        const e = soloEnIM.find(x => x.im_renglon_id === p.im_renglon_id)!;
+        return e.cantidad !== p.cantidad || e.descripcion !== p.descripcion || p.factura_ref != null || p.cod_articulo != null;
+      });
+    })();
+    const deseadosEnApp = deseados?.filter(p => !esDeIM(p)) ?? null;
+    const cambianLosDeLaApp = deseadosEnApp != null && firmaPendientes(deseadosEnApp) !== firmaPendientes(guardados);
     /**
      * 🔑 CAMBIAR EL CLIENTE. Mati (17/09/2026): *"necesitamos poder cambiar el cliente en el
      * presupuesto"*. El caso es haberlo cargado al cliente equivocado.
@@ -209,7 +248,7 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
       clienteNuevo = n;
     }
     const cambiaCliente = clienteNuevo != null && clienteNuevo !== Number(cab.cod_cliente);
-    const mismoSurtido = !cambiaCliente
+    const mismoSurtido = !cambiaCliente && !cambianLosDeIM
       && firmaDelSurtido(items) === firmaDelSurtido(imItems.filter(i => i.cod_articulo > 0));
     /**
      * 🔑 Las observaciones son el campo que la oficina lee justo antes de facturar ("facturar a
@@ -233,8 +272,24 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
     const cambiaFecha = fechaNueva != null && fechaNueva !== (cab.fecha ?? '');
     if (!mismoSurtido && notasIM.length) {
       res.status(409).json({
-        error: `Este presupuesto tiene ${notasIM.length} renglón(es) sin código escritos en InfoManager (${notasIM.map(n => `"${n.detalle ?? 'sin texto'}"`).join(', ')}). Rehacerlo los borraría, y la API de InfoManager no los puede volver a cargar. Cambiá sólo cantidades acá, o hacé el cambio en InfoManager.`,
+        error: `Este presupuesto tiene ${notasIM.length} renglón(es) sin código y con importe escritos en InfoManager (${notasIM.map(n => `"${n.detalle ?? 'sin texto'}"`).join(', ')}). Rehacerlo los borraría, y la API de InfoManager no los puede volver a cargar. Si es un flete, cargalo con "Agregar costo de distribución"; si no, cambiá sólo cantidades acá o hacé el cambio en InfoManager.`,
       });
+      return;
+    }
+    /**
+     * Lo que va a llevar el presupuesto nuevo si hay que rehacerlo: la lista de la pantalla, o —si
+     * es una pantalla vieja que no la manda— todo lo que ya tenía, de la app y de IM.
+     */
+    const pendientesFinales = deseados ?? unirPendientes(guardados, imItems);
+    const hayPendientes = pendientesFinales.length > 0 || guardados.length > 0;
+    if (!mismoSurtido && hayPendientes && guardadosPorId === null) {
+      res.status(409).json({
+        error: `Este presupuesto lleva mercadería ya facturada (${pendientesFinales.map(p => `"${p.descripcion}"`).join(', ')}) y rehacerlo la borraría: ${MSJ_FALTA_MIGRACION}. Cambiá sólo cantidades acá o hacé el cambio en InfoManager.`,
+      });
+      return;
+    }
+    if (mismoSurtido && cambianLosDeLaApp && guardadosPorId === null) {
+      res.status(503).json({ error: `${MSJ_FALTA_MIGRACION}. No se cambió nada.` });
       return;
     }
 
@@ -248,6 +303,17 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
       const payload = emparejarParaPut(items, imItems as any);
       if (!payload) {
         res.status(409).json({ error: 'Los renglones no coinciden con los de InfoManager. Actualizá la pantalla y probá de nuevo.' });
+        return;
+      }
+      /**
+       * 🔑 Si lo único que cambió es lo que viaja sin cobrarse, a InfoManager no se le pide nada:
+       * esa lista vive en la app.
+       */
+      const cambianCantidades = payload.some(p => Number(imItems.find(i => Number(i.id) === p.id)?.cantidad) !== Number(p.cantidad));
+      if (cambianLosDeLaApp && !cambianCantidades && !cambiaObs && !cambiaFecha) {
+        await guardarPendientes(id, id, deseadosEnApp!, guardados, req.user?.sub ?? null);
+        invalidarVista(); invalidarRemitos();
+        res.json({ ok: true, modo: 'pendientes', im_comprobante_id: id, im_numero: cab.numero, fecha: cab.fecha ?? null, aviso: null });
         return;
       }
       await invalidarAprobacion(id);
@@ -293,6 +359,14 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
           });
           if (o.ok || rechazoEdicionConfirmado(o)) resultadoConocido = true;
           if (!o.ok) avisoCab = `Se guardaron las cantidades, pero NO ${qué}: ${o.error}`;
+        }
+      }
+      // Después de IM y sin frenar, como la cabecera: lo de InfoManager ya está hecho y se dice.
+      if (cambianLosDeLaApp) {
+        try { await guardarPendientes(id, id, deseadosEnApp!, guardados, req.user?.sub ?? null); }
+        catch (e: any) {
+          const aviso = `Se guardaron los cambios en InfoManager, pero NO lo que lleva sin cobrar: ${e?.message ?? 'error'}`;
+          avisoCab = avisoCab ? `${avisoCab} · ${aviso}` : aviso;
         }
       }
       invalidarIM(); invalidarVista(); invalidarRemitos();
@@ -369,6 +443,36 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
       return;
     }
 
+    /**
+     * 🔴 LO QUE VIAJA SIN COBRARSE PASA AL NUEVO ANTES DE ANULAR EL VIEJO.
+     *
+     * El nuevo nace sin los renglones a mano —la API no los acepta—, así que su lista se escribe
+     * acá, de una sola vez (migración 055). Si no se puede, el nuevo NO sirve: se anula ÉL y el
+     * original queda como estaba, con sus renglones en IM. Al revés, el pedido saldría sin la
+     * mercadería que el cliente ya pagó.
+     */
+    if (hayPendientes) {
+      try {
+        await guardarPendientes(String(creado.id), id, pendientesFinales, guardados, req.user?.sub ?? null);
+      } catch (e: any) {
+        const motivo = e?.message ?? 'error';
+        const deshecho = creado.numero != null
+          ? await anularComprobante({
+            id: String(creado.id), numero: creado.numero, punto_de_venta: cab.punto_de_venta ?? 1,
+            fecha: fechaNueva ?? cab.fecha ?? fechaArgentina(),
+            observaciones: 'No se pudo pasar lo que lleva sin cobrar (editado desde el panel)',
+          })
+          : { ok: false, error: 'InfoManager no devolvió su número' };
+        resultadoConocido = deshecho.ok;
+        res.status(502).json({
+          error: deshecho.ok
+            ? `No pude pasar lo que lleva sin cobrar al presupuesto nuevo (${motivo}). Se anuló el nuevo: el ${cab.numero ?? id} sigue como estaba.`
+            : `🔴 No pude pasar lo que lleva sin cobrar al presupuesto nuevo ${creado.numero ?? ''} (${motivo}) y tampoco anularlo (${deshecho.error}). Quedaron los dos vivos: anulá el ${creado.numero ?? 'nuevo'} en InfoManager.`,
+        });
+        return;
+      }
+    }
+
     // Ahora sí: el viejo se anula. Si esto falla quedan DOS vivos y hay que decirlo fuerte.
     let avisoAnular: string | null = null;
     if (cab.numero != null && cab.punto_de_venta != null && cab.fecha) {
@@ -421,7 +525,7 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
     });
   } catch (err: any) {
     console.error('[editarPresupuesto]', err?.message);
-    res.status(err instanceof ErrorVersion || err instanceof ErrorFiscal ? err.status : 500).json({ error: err?.message ?? 'error' });
+    res.status(err instanceof ErrorVersion || err instanceof ErrorFiscal || err instanceof ErrorPendientes ? err.status : 500).json({ error: err?.message ?? 'error' });
   } finally {
     if (token && resultadoConocido) await desbloquearPresupuesto(id, token);
     invalidarIM(); invalidarVista(); invalidarRemitos();
@@ -510,6 +614,35 @@ export async function comprobanteParaImprimir(req: Request & { user?: JwtPayload
       .catch(() => ({ data: null } as any));
     const vencimiento = vencimientoDeFactura(cab.fecha, operativo as any);
 
+    /**
+     * 🔑 LO QUE VIAJA SIN COBRARSE, EN EL PAPEL. Mati (01/10/2026) eligió que la mercadería ya
+     * facturada que va con este pedido figure en lo que firma el cliente. En el presupuesto es su
+     * lista (la de la app y la que sigue escrita en IM); en la factura y el remito, la del
+     * presupuesto del que salieron —ahí ya pasó a la app al facturar—.
+     *
+     * 🪤 Si no se puede leer, el papel sale igual pero LO DICE: imprimir un remito sin la
+     * mercadería que lleva, callado, es justo el problema que esto viene a resolver.
+     */
+    let pendientes: Pendiente[] = [];
+    let avisoPendientes: string | null = null;
+    let renglones = items as any[];
+    try {
+      if (cab.tipo_comprobante === 'PR') {
+        pendientes = unirPendientes((await leerPendientes([id]))?.get(id) ?? [], items);
+        // Van en su propio bloque: como renglón en $0 parecería un regalo.
+        renglones = renglones.filter(it => !esPendienteDeIM(it));
+      } else if ((cab.tipo_comprobante === 'FA' || cab.tipo_comprobante === 'RE') && /^\d+$/.test(id)) {
+        const { data: vinculos, error } = await sb().from('presupuestos_facturados').select('im_comprobante_id')
+          .eq('tenant_id', TENANT_ID).or(`im_factura_id.eq.${id},im_remito_id.eq.${id}`);   // id validado numérico
+        if (error) throw new Error(error.message);
+        const origen = [...new Set((vinculos ?? []).map((v: any) => String(v.im_comprobante_id)))];
+        if (origen.length === 1) pendientes = (await leerPendientes(origen))?.get(origen[0]) ?? [];
+      }
+    } catch (e: any) {
+      console.warn('[comprobanteParaImprimir] sin pendientes de entrega:', e?.message);
+      avisoPendientes = 'No se pudo consultar si lleva mercadería ya facturada.';
+    }
+
     const cliente = (clientes as any[]).find(c => Number(c.cod_cliente) === Number(cab.cod_cliente));
     /**
      * 🔑 La dirección y el teléfono van EN EL PAPEL. Mati (09/09/2026): *"tiene que decir la
@@ -530,7 +663,8 @@ export async function comprobanteParaImprimir(req: Request & { user?: JwtPayload
         cod_vendedor: cab.cod_vendedor ?? null, vendedor,
         vence: vencimiento?.fecha ?? null, dias_cta_cte: vencimiento?.dias ?? null,
       },
-      items: (items as any[]).map(it => {
+      pendientes: pendientesParaMostrar(pendientes), aviso_pendientes: avisoPendientes,
+      items: renglones.map(it => {
         const art = cat.get(Number(it.cod_articulo));
         const cant = Number(it.cantidad) || 0;
         // 🪤 `precio` viene NETO (con el descuento adentro) y `precio_orig` bruto. El papel
