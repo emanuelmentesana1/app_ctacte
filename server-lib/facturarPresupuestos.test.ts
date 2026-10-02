@@ -899,6 +899,43 @@ describe('no facturar dos veces lo mismo', () => {
   });
 
   /**
+   * 🔴 02/10/2026: la base devuelve como mucho 1.000 filas y el índice de facturas emitidas por la
+   * app se pedía entero. Pasadas las 1.000, una factura que ES de otro presupuesto quedaba afuera
+   * del índice y se le "deducía" a un pedido repetido del mismo cliente y el mismo importe: el
+   * pedido legítimo se frenaba como "YA ESTÁ FACTURADO" con la factura de otro.
+   */
+  it('🔴 una factura atada a otro presupuesto, más allá de las primeras 1.000 filas, no frena a éste', async () => {
+    const viejas = Array.from({ length: 1000 }, (_, i) => ({ im_comprobante_id: `v${i}`, im_factura_id: `fv${i}`, im_factura_numero: i, im_factura_tipo: 'FA B' }));
+    const filas = [...viejas, { im_comprobante_id: 'otro-pedido', im_factura_id: 'f-del-otro', im_factura_numero: 51071, im_factura_tipo: 'FA B' }];
+    const base = m.sbMock.getMockImplementation()!;
+    m.sbMock.mockImplementation(() => {
+      const real = base();
+      return { ...real, from: (t: string) => {
+        if (t !== 'presupuestos_facturados') return real.from(t);
+        const filtros: Array<(x: any) => boolean> = [];
+        const q: any = { then: (r: any, j: any) => Promise.resolve({ data: filas.filter(x => filtros.every(f => f(x))).slice(0, 1000), error: null }).then(r, j) };
+        for (const k of ['select', 'order', 'limit', 'is', 'or', 'range']) q[k] = () => q;
+        q.eq = (c: string, v: any) => { filtros.push(x => !(c in x) || String(x[c]) === String(v)); return q; };
+        q.in = (c: string, vs: any[]) => { filtros.push(x => vs.map(String).includes(String(x[c]))); return q; };
+        q.not = (c: string, op: string, v: any) => { if (op === 'is' && v === null) filtros.push(x => x[c] != null); return q; };
+        return q;
+      } };
+    });
+    m.cabeceraComprobante.mockResolvedValue({ cod_vendedor: '3', fecha: '2026-09-08', anulada: false, existe: true, observaciones: null });
+    m.fetchClientesIMCached.mockResolvedValue([{ cod_cliente: 297, categoria_iva: 'CF' }]);
+    m.fetchVentasItems.mockResolvedValue([{ id_comprobante: '58727292', cod_articulo: 1, cantidad: 1, precio: 155430.72 }]);
+    m.fetchVentas.mockResolvedValue([
+      { id: 'f-del-otro', numero: 51071, cod_cliente: 297, total: 155430.72, tipo_factura: 'B', tipo_comprobante: 'FA', anulada: 'N', fecha: '2026-09-09' },
+    ]);
+    const r = await prepararFacturacion(
+      [{ im_comprobante_id: '58727292', im_numero: 58158, cod_cliente: 297, cliente_nombre: 'FORRAJERIA El Parque', total: 155430.72, fecha: '2026-09-08' } as any],
+      'jorgelina',
+    );
+    expect(r[0].motivo ?? '').not.toMatch(/YA ESTÁ FACTURADO/i);
+    expect(r[0].ya_facturada).toBeUndefined();
+  });
+
+  /**
    * 🔑 LA SALIDA DEL AVISO. Mati (23/09/2026), con OTTONELLI: *"aparece como que está pendiente de
    * facturar; cuando lo queremos hacer nos sale que está facturado, pero no lo asocia con la
    * factura y remito hechos como para habilitarnos a hacer la NC"*. Eran 386 pedidos así.

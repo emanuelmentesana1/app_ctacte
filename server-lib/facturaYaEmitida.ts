@@ -49,6 +49,17 @@ export interface FacturaSospechada {
 }
 
 const centavos = (v: unknown) => Math.round(Number(v ?? 0) * 100);
+const clave = (cliente: unknown, total: unknown) => `${Number(cliente)}|${centavos(total)}`;
+
+/**
+ * Las facturas que podrían cubrir a alguno de estos presupuestos: mismo cliente y mismo importe.
+ * Son las únicas cuyo vínculo con un presupuesto hace falta leer de la base (ver
+ * `facturasDeLaApp.ts`): el rango trae miles de facturas de mostrador de las sucursales.
+ */
+export function facturasCandidatas(presupuestos: PresupuestoAChequear[], facturas: ComprobanteEmitido[]): ComprobanteEmitido[] {
+  const buscadas = new Set(presupuestos.map(p => clave(p.cod_cliente, p.total)));
+  return facturas.filter(f => buscadas.has(clave(f.cod_cliente, f.total)));
+}
 
 /**
  * Devuelve, por presupuesto, la factura que ya lo cubriría (o `undefined` si no hay ninguna).
@@ -92,7 +103,7 @@ export function buscarFacturasYaEmitidas(
 
   const porClienteImporte = new Map<string, ComprobanteEmitido[]>();
   for (const f of facturas) {
-    const k = `${Number(f.cod_cliente)}|${centavos(f.total)}`;
+    const k = clave(f.cod_cliente, f.total);
     if (!porClienteImporte.has(k)) porClienteImporte.set(k, []);
     porClienteImporte.get(k)!.push(f);
   }
@@ -103,7 +114,7 @@ export function buscarFacturasYaEmitidas(
   for (const p of enOrden) {
     const id = String(p.im_comprobante_id);
     if (salida.has(id)) continue;
-    const candidata = (porClienteImporte.get(`${Number(p.cod_cliente)}|${centavos(p.total)}`) ?? [])
+    const candidata = (porClienteImporte.get(clave(p.cod_cliente, p.total)) ?? [])
       .find(f => !usadas.has(String(f.id)));
     if (!candidata) continue;
     usadas.add(String(candidata.id));

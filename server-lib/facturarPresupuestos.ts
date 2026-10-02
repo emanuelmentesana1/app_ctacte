@@ -42,7 +42,8 @@ import {
   fetchVentasItems, fetchClientesIMCon, cabeceraComprobante, desconfirmarPresupuesto,
   fetchVentas, fechaArgentina, fetchStockPorDeposito, fetchArticulosCatalogo, comprobantesVigentes, getItemsComprobante,
 } from './infomanager.js';
-import { buscarFacturasYaEmitidas } from './facturaYaEmitida.js';
+import { buscarFacturasYaEmitidas, facturasCandidatas } from './facturaYaEmitida.js';
+import { facturasEmitidasPorLaApp } from './facturasDeLaApp.js';
 import { emitirFactura, emitirRemito, emitirRemitoMasivo, letraDeFactura, proximoNumeroFactura,
   claveDeSerie, ID_DESTINO as ID_DESTINO_FACTURA, type SerieComprobante, marcaDeFactura } from './facturarIM.js';
 import type { DatosComprobante } from './facturarIM.js';
@@ -248,24 +249,17 @@ export async function prepararFacturacion(
       const facturasVigentes = ventas.filter((v: any) =>
         String(v.tipo_comprobante ?? '').trim() === 'FA' &&
         String(v.anulada ?? '').trim().toUpperCase() !== 'S');
-      // Las que ya sabemos de qué presupuesto son: no pueden marcar a otro.
-      const { data: nuestrasFilas, error: errNuestras } = await sb().from('presupuestos_facturados')
-        .select('im_comprobante_id, im_factura_id, im_factura_numero, im_factura_tipo')
-        .eq('tenant_id', TENANT_ID).not('im_factura_id', 'is', null);
-      if (errNuestras) throw new Error(errNuestras.message);
-      const nuestras = new Map((nuestrasFilas ?? []).map((n: any) => [String(n.im_comprobante_id), {
-        im_factura_id: n.im_factura_id ?? null,
-        im_factura_numero: n.im_factura_numero ?? null,
-        im_factura_tipo: n.im_factura_tipo ?? null,
-      }]));
-      for (const [k, v] of buscarFacturasYaEmitidas(
-        aRevisar.map(f => ({
-          im_comprobante_id: String(f.im_comprobante_id),
-          cod_cliente: Number(f.cod_cliente),
-          total: Number(f.total ?? 0),
-        })),
-        facturasVigentes as any, nuestras,
-      )) yaEmitidas.set(k, v);
+      const aChequear = aRevisar.map(f => ({
+        im_comprobante_id: String(f.im_comprobante_id),
+        cod_cliente: Number(f.cod_cliente),
+        total: Number(f.total ?? 0),
+      }));
+      // Las que ya sabemos de qué presupuesto son: no pueden marcar a otro. 🔴 Acotadas: sin
+      // filtro la base corta en 1.000 filas (02/10/2026, ver `facturasDeLaApp.ts`).
+      const nuestras = await facturasEmitidasPorLaApp(
+        aChequear.map(p => p.im_comprobante_id),
+        facturasCandidatas(aChequear, facturasVigentes as any).map(f => String(f.id)));
+      for (const [k, v] of buscarFacturasYaEmitidas(aChequear, facturasVigentes as any, nuestras)) yaEmitidas.set(k, v);
     } catch (e: any) {
       // 🪤 No poder chequear no puede bloquear la facturación del día entero, pero tampoco puede
       // pasar callado: se avisa por log y la pantalla sigue con el resto de los controles.

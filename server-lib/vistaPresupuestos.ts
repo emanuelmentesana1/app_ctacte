@@ -22,7 +22,8 @@ import { zonaDeCliente } from './zonaCliente.js';
 import { revisarCantidades } from './controlCantidades.js';
 import { formatosDeBolsa } from './formatosBolsa.js';
 import { armarConsolidado } from './consolidadoArticulos.js';
-import { buscarFacturasYaEmitidas } from './facturaYaEmitida.js';
+import { buscarFacturasYaEmitidas, facturasCandidatas } from './facturaYaEmitida.js';
+import { facturasEmitidasPorLaApp } from './facturasDeLaApp.js';
 import { avisosDeListaPorPedido } from './listasPorCliente.js';
 import { reglasActivas, descuentosActivos, catalogoParaListas } from './pedidos.js';
 import { esPedidoInternoDeSucursal } from './pedidosInternos.js';
@@ -242,12 +243,17 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
      * 🪤 `presupuestos_facturados` se pedía TRES veces con el mismo filtro y distintas columnas.
      * Es una sola consulta con todas.
      */
-    const [
+    const facturasVigentes = ventas.filter((v: any) =>
+      String(v.tipo_comprobante ?? '').trim() === 'FA' &&
+      String(v.anulada ?? '').trim().toUpperCase() !== 'S');
+    const aChequear = presupuestos.map((p: any) => ({
+      im_comprobante_id: String(p.id), cod_cliente: Number(p.cod_cliente), total: Number(p.total ?? 0),
+    }));
+    const [[
       { data: nuestros },
       { data: revisiones },
       { data: delRango },
-      { data: nuestrasFact },
-    ] = await Promise.all([
+    ], nuestras] = await Promise.all([Promise.all([
       // Cuáles de estos presupuestos salieron de la app, para mostrar el vendedor y su error.
       sb().from('pedidos_vendedor')
         .select('id, im_presupuesto_id, cod_vendedor, estado, im_error')
@@ -260,15 +266,17 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
       sb().from('presupuestos_facturados')
         .select('im_comprobante_id, im_remito_id, im_remito_numero, facturado_at, im_factura_id, im_factura_numero, im_factura_tipo, cod_cliente, cod_empresa')
         .eq('tenant_id', TENANT_ID).in('im_comprobante_id', ids),
+    ].map(async q => { const r = await q; if (r.error) throw new Error(r.error.message); return r; })),
       /**
-       * 🪤 Ésta va SIN filtro de ids a propósito: es el índice de qué factura emitimos nosotros,
-       * y `buscarFacturasYaEmitidas` lo cruza contra las facturas vivas del rango para no acusar
-       * de duplicada a una factura que ya sabemos de quién es.
+       * El índice de qué factura emitimos nosotros, para estos presupuestos y para las facturas
+       * del rango que podrían cubrirlos: `buscarFacturasYaEmitidas` no acusa de duplicada a una
+       * factura que ya sabemos de quién es. En la misma ronda: no suma espera.
+       *
+       * 🔴 Iba SIN filtro y la base corta en 1.000 filas: desde el 30/09 las facturas nuevas de la
+       * app salían como "deducidas" y seguían en "Para facturar" (ver `facturasDeLaApp.ts`).
        */
-      sb().from('presupuestos_facturados')
-        .select('im_comprobante_id, im_factura_id, im_factura_numero, im_factura_tipo')
-        .eq('tenant_id', TENANT_ID).not('im_factura_id', 'is', null),
-    ].map(async q => { const r = await q; if (r.error) throw new Error(r.error.message); return r; }));
+      facturasEmitidasPorLaApp(ids, facturasCandidatas(aChequear, facturasVigentes as any).map(f => String(f.id))),
+    ]);
     const mio = new Map((nuestros ?? []).map((p: any) => [String(p.im_presupuesto_id), p]));
 
     /**
@@ -372,20 +380,7 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
      * están todos en `tipo_presupuesto: 'C'`. Se deduce comparando contra las facturas reales del
      * rango — mismo cliente, mismo importe al centavo.
      */
-    const nuestras = new Map((nuestrasFact ?? []).map((n: any) => [String(n.im_comprobante_id), {
-      im_factura_id: n.im_factura_id ?? null,
-      im_factura_numero: n.im_factura_numero ?? null,
-      im_factura_tipo: n.im_factura_tipo ?? null,
-    }]));
-    const facturasVigentes = ventas.filter((v: any) =>
-      String(v.tipo_comprobante ?? '').trim() === 'FA' &&
-      String(v.anulada ?? '').trim().toUpperCase() !== 'S');
-    const facturaDelPresupuesto = buscarFacturasYaEmitidas(
-      presupuestos.map((p: any) => ({
-        im_comprobante_id: String(p.id), cod_cliente: Number(p.cod_cliente), total: Number(p.total ?? 0),
-      })),
-      facturasVigentes as any, nuestras,
-    );
+    const facturaDelPresupuesto = buscarFacturasYaEmitidas(aChequear, facturasVigentes as any, nuestras);
 
     /**
      * 🔴 DOS PRESUPUESTOS VIVOS DEL MISMO CLIENTE EL MISMO DÍA.

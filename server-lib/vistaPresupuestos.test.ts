@@ -526,3 +526,50 @@ describe('lo que viaja sin cobrarse (01/10/2026)', () => {
     expect(v.consolidado.articulos.map((x: any) => [Number(x.cod_articulo), x.pedido])).toEqual([[1, 1]]);
   });
 });
+
+describe('las facturas que emitió la app no se cortan en 1.000 filas (02/10/2026)', () => {
+  /**
+   * 🔴 Mati: *"aparecen en presupuestos muchos que ya están facturados... termina confundiendo a
+   * Jo"*. La base devuelve como mucho 1.000 filas por consulta, y el índice de facturas emitidas
+   * por la app se pedía ENTERO y sin filtro. El 30/09 la tabla pasó las 1.000 (1.054 contra 1.000,
+   * medido el 02/10) y las facturas nuevas quedaron afuera: ISA, Cristian (PR 59298, facturado por
+   * la app el 30/09 con la FA B 51071) seguía en "Para facturar" como si fuera una factura ajena.
+   */
+  function sbConTope(tablas: Record<string, any[]>) {
+    m.sbMock.mockImplementation(() => ({
+      from: (t: string) => {
+        const filtros: Array<(x: any) => boolean> = [];
+        const q: any = {
+          then: (r: any, j: any) => Promise.resolve({ data: (tablas[t] ?? []).filter(x => filtros.every(f => f(x))).slice(0, 1000), error: null }).then(r, j),
+        };
+        for (const k of ['select', 'order', 'limit', 'is', 'or', 'range']) q[k] = () => q;
+        // Como PostgREST: un filtro sobre una columna que la fila no tiene no la descarta (son las de otras tablas).
+        q.eq = (c: string, v: any) => { filtros.push(x => !(c in x) || String(x[c]) === String(v)); return q; };
+        q.in = (c: string, vs: any[]) => { filtros.push(x => vs.map(String).includes(String(x[c]))); return q; };
+        q.not = (c: string, op: string, v: any) => { if (op === 'is' && v === null) filtros.push(x => x[c] != null); return q; };
+        return q;
+      },
+    }));
+  }
+  const viejas = Array.from({ length: 1000 }, (_, i) => ({ im_comprobante_id: `v${i}`, im_factura_id: `fv${i}`, im_factura_numero: i, im_factura_tipo: 'FA B' }));
+  const FA_NUEVA = { id: '59008516', numero: 51071, tipo_comprobante: 'FA', tipo_factura: 'B', anulada: 'N', cod_empresa: 1, fecha: '2026-09-09', cod_cliente: 7, total: 10000 };
+
+  it('🔴 la factura de la app sigue siendo "nuestra" aunque quede más allá de las primeras 1.000 filas', async () => {
+    sbConTope({ presupuestos_facturados: [...viejas, { im_comprobante_id: '999', im_factura_id: '59008516', im_factura_numero: 51071, im_factura_tipo: 'FA B', im_remito_id: 'r1', im_remito_numero: 78375, facturado_at: '2026-09-30T12:07:37Z' }] });
+    m.fetchVentas.mockResolvedValue([PR, FA_NUEVA]);
+    m.fetchVentasItems.mockResolvedValue(renglon(12));
+    const v = await vistaDeRango('2026-09-09', '2026-09-09', true);
+    const fila = [...v.pendientes, ...v.asignados].find((f: any) => f.im_comprobante_id === '999');
+    expect(fila.factura).toMatchObject({ origen: 'nuestra', numero: 51071 });
+  });
+
+  it('🔴 y una factura que es de OTRO presupuesto (más allá de las 1.000) no se le adjudica a éste', async () => {
+    // Mismo cliente y mismo importe: un pedido repetido. La factura es del otro, no de éste.
+    sbConTope({ presupuestos_facturados: [...viejas, { im_comprobante_id: 'otro', im_factura_id: '59008516', im_factura_numero: 51071, im_factura_tipo: 'FA B' }] });
+    m.fetchVentas.mockResolvedValue([PR, FA_NUEVA]);
+    m.fetchVentasItems.mockResolvedValue(renglon(12));
+    const v = await vistaDeRango('2026-09-09', '2026-09-09', true);
+    const fila = [...v.pendientes, ...v.asignados].find((f: any) => f.im_comprobante_id === '999');
+    expect(fila.factura).toBeNull();
+  });
+});
