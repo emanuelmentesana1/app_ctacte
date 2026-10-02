@@ -273,6 +273,17 @@ async function computeGoalItems(year: number, month: number, incluirInactivos: b
     return { items, isCurrentMonth, isFutureMonth, diasTotal, diasAuto, diasConFeriados, diasTrans, diasRestantes, holidays, cfg };
 }
 
+/**
+ * Los vendedores activos, como los tilda la pestaña Cobranza la primera vez que se abre (la
+ * lista de /api/goals filtrada por `activo`). La usa el aviso diario de deuda
+ * (server-lib/avisoDeuda.ts) para que su total sea el de la pantalla.
+ */
+export async function codsVendedoresActivos(): Promise<Set<string>> {
+  const t = today();
+  const { items } = await computeGoalItems(t.year, t.month, false);
+  return new Set(items.filter(i => i.activo).map(i => String(i.cod_vendedor)));
+}
+
 export async function listGoals(req: Request & { user?: JwtPayload }, res: Response) {
   try {
     if (!hasSupabase()) { res.status(500).json({ error: 'Supabase no configurado' }); return; }
