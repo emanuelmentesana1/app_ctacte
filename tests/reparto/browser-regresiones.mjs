@@ -343,6 +343,8 @@ try {
       // "Corregir" hoy; "Editar" con la solapa de notas aparte cuando salga la edición de facturas.
       await page.getByRole('button',{name:/^(Corregir|Editar)$/}).first().click();
       const solapaNotas=page.getByRole('button',{name:'Con notas (NC/ND)',exact:true});
+      // 🪤 Las solapas aparecen cuando terminó de cargar la factura: preguntar antes daba "no está" y el test seguía en Editar.
+      await page.locator('.cf-tabla').waitFor();
       if(await solapaNotas.isVisible().catch(()=>false)) await solapaNotas.click();
       const tipear=async(etiqueta,texto)=>{
         const campo=page.getByLabel(etiqueta,{exact:true});
