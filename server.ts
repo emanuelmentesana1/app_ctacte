@@ -29,7 +29,9 @@ import {
   uploadRecibo, listRecibos, getReciboById, facturasCandidatas, aprobarRecibo, rechazarRecibo, editarRecibo, cuentasDebug, cuentasRefresh, cuentasEfectivo,
   reverificarMP, elegirMatchMP, procesarColaMP, caducarRecibosPendientes, mpConfig
 } from './server-lib/recibos.js';
-import { listGoals, setGoal, syncVentasNow, setMonthConfig, listClientesObjetivo, debugClienteAvance, getGoalsSnapshot, botGoals } from './server-lib/goals.js';
+import { listGoals, setGoal, syncVentasNow, setMonthConfig, listClientesObjetivo, debugClienteAvance, getGoalsSnapshot, botGoals, codsVendedoresActivos } from './server-lib/goals.js';
+import { armarAvisoDeuda, formatearAvisoDeuda, publicarEnSlack } from './server-lib/avisoDeuda.js';
+import { hoyArgentina } from './src/utils/hoyArgentina.js';
 import { listGoalsHistorico } from './server-lib/goalsHistorico.js';
 import { listComisiones, listComisionesSucursal, probeVenta, comisionesSample, topArticulos, facturasVendedor, diagnoseArticulo } from './server-lib/comisiones.js';
 import { listOverrides, addOverride, deleteOverride } from './server-lib/comisionOverrides.js';
@@ -1262,6 +1264,41 @@ app.get('/api/data', maybeJwt, requireAuth, async (req: express.Request & { user
     }
 });
 
+// ─── Aviso diario de deuda (Slack) ────────────────────────────────────────────
+// Ver server-lib/avisoDeuda.ts. El cron de las 7:58 está al final del archivo; estas dos rutas
+// son para probarlo sin esperar al horario: GET muestra el mensaje sin mandarlo, POST lo publica.
+const avisoDeudaDias = () => {
+    const n = Number(process.env.AVISO_DEUDA_DIAS);
+    return Number.isInteger(n) && n > 0 ? n : 15;
+};
+const armarAvisoDeudaHoy = () => armarAvisoDeuda({
+    datos: () => fetchData(false),
+    codsActivos: codsVendedoresActivos,
+    hoy: hoyArgentina(),
+    minimo: avisoDeudaDias(),
+});
+
+app.get('/api/avisos/deuda', requireJwt, requireAdmin, async (_req, res) => {
+    try {
+        const r = await armarAvisoDeudaHoy();
+        res.json({ ok: true, clientes: r.atrasados.length, deudores: r.totalDeudores, texto: formatearAvisoDeuda(r), slack: Boolean(process.env.SLACK_WEBHOOK_AVISOS) });
+    } catch (err: any) {
+        res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+    }
+});
+
+app.post('/api/avisos/deuda/enviar', requireJwt, requireAdmin, async (_req, res) => {
+    const webhook = process.env.SLACK_WEBHOOK_AVISOS;
+    if (!webhook) { res.status(503).json({ ok: false, error: 'Falta SLACK_WEBHOOK_AVISOS' }); return; }
+    try {
+        const r = await armarAvisoDeudaHoy();
+        await publicarEnSlack(webhook, formatearAvisoDeuda(r));
+        res.json({ ok: true, clientes: r.atrasados.length });
+    } catch (err: any) {
+        res.status(500).json({ ok: false, error: err?.message ?? String(err) });
+    }
+});
+
 // ─── Overrides API ─────────────────────────────────────────────────────────────
 // Auditoría 22-jul: estos 4 endpoints escriben tablas de plata (apagar intereses,
 // estirar plazos) y estaban tras requireAuth (legacy: acepta token anónimo o
@@ -1922,3 +1959,32 @@ if (hasSupabase()) {
     console.log('Cron snapshot conciliacion: 50 23 * * * (America/Argentina/Buenos_Aires)');
 }
 
+// ─── Cron: aviso diario de deuda en Slack ─────────────────────────────────────
+// Lunes a sábado 7:58 ART (pedido de Manolo, 01/10/2026): los clientes con deuda de 15 días o
+// más, a #semillero-avisos. 7:58 y no 8:00 para que llegue antes de que arranque el día.
+// Sin SLACK_WEBHOOK_AVISOS no se agenda: la app anda igual.
+// 🪤 Usa fetchData(false): el mismo cache de /api/data que el pre-warm refresca cada 8 min, así
+// que no suma llamadas a InfoManager.
+let avisoDeudaEnCurso = false;
+if (process.env.SLACK_WEBHOOK_AVISOS) {
+    cron.schedule('58 7 * * 1-6', async () => {
+        if (avisoDeudaEnCurso) return;
+        avisoDeudaEnCurso = true;
+        const webhook = process.env.SLACK_WEBHOOK_AVISOS!;
+        try {
+            const r = await armarAvisoDeudaHoy();
+            await publicarEnSlack(webhook, formatearAvisoDeuda(r));
+            console.log(`[cron aviso deuda] ok · ${r.atrasados.length} clientes de ${r.totalDeudores} deudores`);
+        } catch (err: any) {
+            const motivo = err?.message ?? String(err);
+            console.warn(`[cron aviso deuda] fallo: ${motivo}`);
+            // Una línea en el canal: el silencio no distingue "nadie debe" de "no se pudo mirar".
+            await publicarEnSlack(webhook, `*Deuda de ${avisoDeudaDias()} días o más*\nHoy no se pudo armar el aviso (${motivo}).`).catch(() => { });
+        } finally {
+            avisoDeudaEnCurso = false;
+        }
+    }, { timezone: 'America/Argentina/Buenos_Aires' });
+    console.log('Cron aviso deuda: 58 7 * * 1-6 (America/Argentina/Buenos_Aires)');
+} else {
+    console.log('Cron aviso deuda deshabilitado (falta SLACK_WEBHOOK_AVISOS)');
+}
