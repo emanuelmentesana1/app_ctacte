@@ -6,13 +6,14 @@ import type { Request, Response } from 'express';
 import { sb, TENANT_ID } from './supabase.js';
 import { ocrRecibo } from './ocrRecibo.js';
 import { crearRecibo, fetchComprobPendientes, fetchClientesIMCached, type ReciboPago, type ReciboComprobante } from './infomanager.js';
-import { getFormaPagoIM, isValidMedio, exigeFoto } from './mediosPago.js';
+import { getFormaPagoIM, isValidMedio, exigeFoto, MEDIOS_PAGO } from './mediosPago.js';
 import { rangoDeRecibos, MAX_FILAS } from './rangoRecibos.js';
 import { resolveCuentaCod, debugCuentasResolver, invalidateCuentasCache, listCuentasEfectivo } from './cuentasResolver.js';
 import { buscarPagoEnMP, todayISO_AR, mpConfigStatus, type MPMatch, type MPCuenta } from './mercadopago.js';
 import { ajustarImputacionIM, validarContraPendientes } from './recibosImputacion.js';
 import { CADUCADO_PREFIX, parseMontoUpload } from './recibosShared.js';
 import { usuarioIMDelAprobador, esRechazoPorUsuario } from './usuarioReciboIM.js';
+import { registrarTiempo } from './tiempos.js';
 import type { JwtPayload } from './auth.js';
 
 // Fuente única de los estados de comprobantes_pago (coincide con el CHECK de la
@@ -96,6 +97,8 @@ async function getSignedUrlCached(path: string): Promise<string | null> {
  * Requiere JWT (vendedor).
  */
 export async function uploadRecibo(req: Request & { user?: JwtPayload; file?: any }, res: Response) {
+  const t0 = Date.now();
+  res.once('finish', () => registrarTiempo('recibo.carga', Date.now() - t0));
   try {
     const user = req.user;
     if (!user) { res.status(401).json({ error: 'No autorizado' }); return; }
@@ -249,6 +252,8 @@ export async function uploadRecibo(req: Request & { user?: JwtPayload; file?: an
 // Excluimos JSONs grandes (ocr_raw, mp_candidates, infomanager_response) que solo
 // se consumen en el detalle y agregaban cientos de KB al payload sin uso visible.
 const LIST_COLUMNS = 'id,cod_cliente,cod_vendedor,monto,fecha_comprobante,medio_pago,status,foto_url,ocr_confidence,created_at';
+/** Cuántas miniaturas se firman en la lista: las de arriba, que son las que se ven. */
+const MAX_FOTOS_LISTA = 40;
 
 /**
  * Caduca recibos que quedaron en 'pendiente_revision' demasiado tiempo (default
@@ -324,7 +329,9 @@ export async function listRecibos(req: Request & { user?: JwtPayload }, res: Res
     if (error) { res.status(500).json({ error: error.message }); return; }
 
     const rows = data ?? [];
-    const paths = rows.map((r: any) => r.foto_url).filter(Boolean);
+    // S32 · mejora 10 (04/10/2026): firmar las 147 fotos de un mes tardaba hasta 790 ms. Se firman
+    // las miniaturas de los más recientes; la foto de los demás se firma al abrir el recibo.
+    const paths = rows.slice(0, MAX_FOTOS_LISTA).map((r: any) => r.foto_url).filter(Boolean);
     const urlMap = await getSignedUrlsCached(paths);
     const withUrls = rows.map((r: any) => ({
       ...r,
@@ -381,7 +388,9 @@ export async function facturasCandidatas(req: Request & { user?: JwtPayload }, r
     if (error || !comp) { res.status(404).json({ error: 'Comprobante no encontrado' }); return; }
 
     const codEmpresa = Number(req.query.cod_empresa) || 1;
+    const tIM = Date.now();
     const pendientes = await fetchComprobPendientes(codEmpresa, comp.cod_cliente);
+    registrarTiempo('im.pendientes', Date.now() - tIM);
     res.json({ ok: true, cod_cliente: comp.cod_cliente, cod_empresa: codEmpresa, facturas: pendientes });
   } catch (err: any) {
     res.status(500).json({ error: err?.message ?? 'error' });
@@ -406,6 +415,7 @@ const aprobacionesEnCurso = new Set<string>();
 export async function aprobarRecibo(req: Request & { user?: JwtPayload }, res: Response) {
   const compId = String(req.params.id);
   let claimed = false;
+  const t0 = Date.now();
   try {
     const user = req.user!;
     if (!puedeRevisarRecibos(user.rol)) { res.status(403).json({ error: 'Requiere admin, gerente o administrativo' }); return; }
@@ -499,6 +509,34 @@ export async function aprobarRecibo(req: Request & { user?: JwtPayload }, res: R
     const codCuentaOverride = (typeof body.cod_cuenta === 'string' && /^\d{1,10}$/.test(body.cod_cuenta.trim()))
       ? body.cod_cuenta.trim()
       : null;
+    /**
+     * 🔴 La cuenta la valida el SERVIDOR (S32 · mejora 6, 04/10/2026). La lista de cajas sólo
+     * filtraba lo que se ve en pantalla: un pedido armado a mano podía imputar a cualquier cuenta.
+     *  · Elegir caja tiene sentido sólo en efectivo, y sólo entre las habilitadas.
+     *  · Pagos armados a mano: cada cuenta tiene que ser una de cobro (la de algún medio o una caja).
+     */
+    if (codCuentaOverride && !esAnticipo) {
+      if (medioPago !== 'efectivo') {
+        res.status(400).json({ error: `En ${medioPago} la cuenta sale del medio de pago: sólo en efectivo se elige la caja.` });
+        return;
+      }
+      const cajas = (await listCuentasEfectivo()).map(c => String(c.cod_cuenta));
+      if (!cajas.includes(codCuentaOverride)) {
+        res.status(400).json({ error: `La caja ${codCuentaOverride} no está habilitada para recibos. Elegí una de la lista.` });
+        return;
+      }
+    }
+    if (pagosBody.length && !esAnticipo) {
+      const deCobro = new Set([
+        ...(await Promise.all(MEDIOS_PAGO.map(mp => resolveCuentaCod(mp.value)))).filter(Boolean),
+        ...(await listCuentasEfectivo()).map(c => String(c.cod_cuenta)),
+      ]);
+      const ajena = pagosBody.find(p => p.cod_cuenta != null && !deCobro.has(String(p.cod_cuenta)));
+      if (ajena) {
+        res.status(400).json({ error: `La cuenta ${ajena.cod_cuenta} no es una cuenta de cobro: no se emite.` });
+        return;
+      }
+    }
     let pagos: ReciboPago[];
     if (pagosBody.length && !esAnticipo) {
       pagos = pagosBody.map(p => ({
@@ -619,13 +657,17 @@ export async function aprobarRecibo(req: Request & { user?: JwtPayload }, res: R
       pagos,
       comprobantes
     };
+    const tIM = Date.now();
     let imRes = await crearRecibo(payloadIM);
+    registrarTiempo('im.recibo.post', Date.now() - tIM);
     // 🪤 Si IM rechaza ESE usuario (no existe o no tiene permiso), se reintenta UNA vez con el de la
     // app: mejor un recibo emitido con el usuario de siempre que la cobranza trabada. Sólo ante un
     // rechazo explícito: sin respuesta no se sabe si el recibo entró, y ahí no se reintenta nunca.
     if (!imRes.ok && !imRes.sinRespuesta && usuario !== IM_USUARIO && esRechazoPorUsuario(imRes.raw)) {
       console.warn(`[aprobar] IM rechazó el usuario "${usuario}" (${JSON.stringify(imRes.raw).slice(0, 200)}): reintento con "${IM_USUARIO}"`);
+      const tReintento = Date.now();
       imRes = await crearRecibo({ ...payloadIM, usuario: IM_USUARIO });
+      registrarTiempo('im.recibo.post', Date.now() - tReintento);
     }
 
     // Si IM devolvió una fecha distinta a la que enviamos, lo logueamos para
@@ -704,6 +746,7 @@ export async function aprobarRecibo(req: Request & { user?: JwtPayload }, res: R
     res.status(500).json({ error: err?.message ?? 'error' });
   } finally {
     if (claimed) aprobacionesEnCurso.delete(compId);
+    registrarTiempo('recibo.aprobar', Date.now() - t0);
   }
 }
 

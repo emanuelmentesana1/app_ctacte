@@ -31,6 +31,8 @@ import {
 } from './server-lib/recibos.js';
 import { posiblesDuplicadosRecibo } from './server-lib/recibosDuplicados.js';
 import { aprobarEnLote } from './server-lib/recibosLote.js';
+import { controlRecibosIM } from './server-lib/recibosControlIM.js';
+import { tiemposRecibos } from './server-lib/tiempos.js';
 import { listGoals, setGoal, syncVentasNow, setMonthConfig, listClientesObjetivo, debugClienteAvance, getGoalsSnapshot, botGoals, codsVendedoresActivos } from './server-lib/goals.js';
 import { armarAvisoDeuda, formatearAvisoDeuda, publicarEnSlack } from './server-lib/avisoDeuda.js';
 import { hoyArgentina } from './src/utils/hoyArgentina.js';
@@ -679,6 +681,10 @@ app.post('/api/recibos/lote', requireJwt, (req: any, res) => aprobarEnLote(req, 
 app.get('/api/recibos/mp-config', requireJwt, (req: any, res) => mpConfig(req, res));
 // ¿Este pago ya figura en la app o en IM? Aviso antes de cargar y de aprobar (S32).
 app.get('/api/recibos/posibles-duplicados', requireJwt, (req: any, res) => posiblesDuplicadosRecibo(req, res));
+// Recibos que emitió la app y que IM ya no tiene (S32 · mejora 7): informe para la oficina.
+app.get('/api/recibos/control-im', requireJwt, (req: any, res) => controlRecibosIM(req, res));
+// Cuánto tarda cada paso de la cobranza desde el último despliegue (S32 · mejora 9).
+app.get('/api/recibos/tiempos', requireJwt, (req: any, res) => tiemposRecibos(req, res));
 app.get('/api/recibos/:id', requireJwt, (req: any, res) => getReciboById(req, res));
 app.get('/api/recibos/:id/facturas-candidatas', requireJwt, (req: any, res) => facturasCandidatas(req, res));
 app.post('/api/recibos/:id/aprobar', requireJwt, (req: any, res) => aprobarRecibo(req, res));

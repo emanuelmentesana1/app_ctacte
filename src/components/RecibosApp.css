@@ -659,3 +659,8 @@
 .rec-lote-resultado { display: flex; align-items: center; gap: 6px; font-size: 13px }
 .rec-lote-resultado.ok { color: #0B6B34 }
 .rec-lote-resultado.mal { color: #A83E2B }
+
+/* Recibos de la app que IM ya no tiene (S32 · mejora 7): informe plegado, no frena nada. */
+.rec-control-im { display: flex; flex-direction: column; gap: 4px; font-size: 13px }
+.rec-control-im-chip { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #EEC045; background: #FFF6E0; color: #5c4510; border-radius: 999px; padding: 3px 10px; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer }
+.rec-control-im ul { margin: 0; padding-left: 18px; color: #5c4510 }

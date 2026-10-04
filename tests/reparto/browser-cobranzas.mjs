@@ -36,7 +36,7 @@ const invoices = [
   { COD_CLIENT: '815', CLIENTES_N: 'CLIENTE BETA', SALDO: 80_000, DIAS_EMISI: 4 },
 ];
 
-async function abrir(user, { alAprobar, duplicados, lote } = {}) {
+async function abrir(user, { alAprobar, duplicados, lote, controlIM } = {}) {
   const ctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   await ctx.addInitScript(() => localStorage.setItem('auth_token', 'audit-local-only'));
   const page = await ctx.newPage();
@@ -57,6 +57,7 @@ async function abrir(user, { alAprobar, duplicados, lote } = {}) {
     if (u.pathname === '/api/notificaciones') return reply(route, { ok: true, items: [], notificaciones: [] });
     if (u.pathname === '/api/clientes/lookup') return reply(route, { ok: true, items: clientes });
     if (u.pathname === '/api/recibos/mp-config') return reply(route, { ok: true, activas: 3, total: 3, cuentas: [] });
+    if (u.pathname === '/api/recibos/control-im') return reply(route, controlIM ?? { ok: true, dias: 14, revisados: 0, faltan: [] });
     if (u.pathname === '/api/recibos/lote' && metodo === 'POST') {
       const body = JSON.parse(route.request().postData() || '{}');
       return reply(route, lote ? lote(body) : { ok: true, tope: 3, plan: [], consultado: { im: true } });
@@ -202,6 +203,18 @@ try {
       await panel.locator('.rec-lote-resultado', { hasText: '58999001' }).waitFor({ timeout: 4000 });
       const aprobar = pedidos.find(p => p.accion === 'aprobar');
       assert(aprobar && JSON.stringify(aprobar.ids) === '["r1"]', `Mandó otros ids: ${JSON.stringify(aprobar)}`);
+    } finally { await ctx.close(); }
+  });
+  await test('Anto: la lista avisa si un recibo de la app ya no está en IM (borrado allá)', async () => {
+    const controlIM = { ok: true, dias: 14, revisados: 40, faltan: [{ id: 'x', cod_cliente: 722, monto: 700_089, fecha_comprobante: '2026-09-24', infomanager_recibo_id: '58965142', imputado_at: '2026-09-25T11:46:02Z', cod_empresa: 1, reviewed_by_nombre: 'Anto' }] };
+    const { page, ctx } = await abrir(anto, { controlIM });
+    try {
+      await page.locator('button[title="Cargar pago"]').click();
+      const aviso = page.locator('.rec-control-im');
+      await aviso.waitFor({ timeout: 4000 });
+      assert((await aviso.innerText()).includes('1 recibo'), `El aviso no dice cuántos: ${await aviso.innerText()}`);
+      await aviso.locator('button').first().click();
+      assert((await aviso.innerText()).includes('58965142'), 'No muestra el número del recibo de IM');
     } finally { await ctx.close(); }
   });
 } finally {

@@ -13,6 +13,7 @@ import { sb, TENANT_ID } from './supabase.js';
 import { getV2, imV2Configurada } from './imApiV2.js';
 import { posiblesDuplicados, VENTANA_IM, VENTANA_APP, type ReciboAppLite, type ReciboIMLite } from './duplicadosRecibo.js';
 import type { JwtPayload } from './auth.js';
+import { registrarTiempo } from './tiempos.js';
 
 const sumarDias = (iso: string, n: number) =>
   new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) + n * 86_400_000).toISOString().slice(0, 10);
@@ -39,6 +40,8 @@ async function recibosIMDelCliente(cod: number, desde: string, hasta: string): P
 }
 
 export async function posiblesDuplicadosRecibo(req: Request & { user?: JwtPayload }, res: Response) {
+  const t0 = Date.now();
+  res.once?.('finish', () => registrarTiempo('recibo.duplicados', Date.now() - t0));
   if (!req.user) { res.status(401).json({ error: 'No autorizado' }); return; }
   const cod = Number(req.query.cod_cliente);
   const monto = Number(req.query.monto);

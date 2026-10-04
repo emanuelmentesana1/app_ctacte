@@ -26,7 +26,7 @@ vi.mock('./cuentasResolver.js', () => ({
   resolveCuentaCod: vi.fn(async () => '1120003'),
   debugCuentasResolver: vi.fn(async () => ({})),
   invalidateCuentasCache: vi.fn(),
-  listCuentasEfectivo: vi.fn(async () => []),
+  listCuentasEfectivo: vi.fn(async () => [{ cod_cuenta: '1110005', nombre: 'Caja Casa Central', es_default: true }, { cod_cuenta: '1110004', nombre: 'Caja Chica 2', es_default: false }]),
 }));
 vi.mock('./perfilUsuario.js', () => ({ filaUsuario: m.filaUsuario }));
 vi.mock('./ocrRecibo.js', () => ({ ocrRecibo: vi.fn() }));
@@ -130,5 +130,48 @@ describe('aprobarRecibo — usuario de IM de quien aprueba (S32 · mejora 5)', (
     m.crearRecibo.mockResolvedValue({ ok: true, id: '1', raw: {} });
     await aprobarRecibo(req({ usuario: 'otro_usuario' }), res());
     expect(m.crearRecibo.mock.calls[0][0].usuario).toBe('anto');
+  });
+});
+
+describe('aprobarRecibo — la caja la valida el servidor (S32 · mejora 6)', () => {
+  it('Caja Chica 2 en efectivo se acepta (está en la lista de cajas)', async () => {
+    m.crearRecibo.mockResolvedValue({ ok: true, id: '1', raw: {} });
+    const r = res();
+    await aprobarRecibo(req({ medio_pago: 'efectivo', cod_cuenta: '1110004' }), r);
+    expect(r.statusCode).toBe(200);
+    expect(m.crearRecibo.mock.calls[0][0].pagos[0].cod_cuenta).toBe('1110004');
+  });
+
+  it('🔴 una caja que no está habilitada se rechaza y NO se emite', async () => {
+    const r = res();
+    await aprobarRecibo(req({ medio_pago: 'efectivo', cod_cuenta: '1110008' }), r);
+    expect(r.statusCode).toBe(400);
+    expect(m.crearRecibo).not.toHaveBeenCalled();
+  });
+
+  it('en una transferencia no se puede pisar la cuenta de cobro', async () => {
+    const r = res();
+    await aprobarRecibo(req({ medio_pago: 'mercadopago', cod_cuenta: '1110005' }), r);
+    expect(r.statusCode).toBe(400);
+    expect(m.crearRecibo).not.toHaveBeenCalled();
+  });
+
+  it('pagos armados a mano con una cuenta fuera de las de cobro se rechazan', async () => {
+    const r = res();
+    await aprobarRecibo(req({ pagos: [{ forma_pago: 'OT', importe: '250000', cod_cuenta: '9999999' }] }), r);
+    expect(r.statusCode).toBe(400);
+    expect(m.crearRecibo).not.toHaveBeenCalled();
+  });
+});
+
+describe('aprobarRecibo — registra sus tiempos (S32 · mejora 9)', () => {
+  it('después de aprobar quedan medidos el total y la emisión en IM', async () => {
+    const { resumenTiempos, reiniciarTiempos } = await import('./tiempos.js');
+    reiniciarTiempos();
+    m.crearRecibo.mockResolvedValue({ ok: true, id: '1', raw: {} });
+    await aprobarRecibo(req(), res());
+    const t = resumenTiempos();
+    expect(t['recibo.aprobar']?.n).toBe(1);
+    expect(t['im.recibo.post']?.n).toBe(1);
   });
 });

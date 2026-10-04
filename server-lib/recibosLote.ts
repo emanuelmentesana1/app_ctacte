@@ -22,6 +22,7 @@ import { aprobarRecibo } from './recibos.js';
 import { planDelLote, type CandidatoLote, type PasoLote } from './loteRecibos.js';
 import { posiblesDuplicados, VENTANA_IM, VENTANA_APP, type ReciboAppLite, type ReciboIMLite } from './duplicadosRecibo.js';
 import type { FacturaParaImputar } from '../src/utils/aprobacionRecibos.js';
+import { registrarTiempo } from './tiempos.js';
 
 /** El lote es de Casa Central: los pagos verificados por MercadoPago entran a la empresa 1. */
 const EMPRESA = 1;
@@ -105,7 +106,9 @@ export async function aprobarEnLote(req: Request & { user?: JwtPayload }, res: R
     const { data: filas, error } = await q;
     if (error) { res.status(502).json({ error: `No pude leer los recibos: ${error.message}` }); return; }
 
+    const tPlan = Date.now();
     const { plan, imConsultado } = await armarPlan((filas ?? []) as FilaRecibo[]);
+    registrarTiempo('recibo.lote.plan', Date.now() - tPlan);
     if (accion === 'plan') { res.json({ ok: true, tope: tope(), plan, consultado: { im: imConsultado } }); return; }
 
     // Aprobar: uno por uno, con el mismo handler de la pantalla. Se frena en el primer problema.
@@ -120,6 +123,7 @@ export async function aprobarEnLote(req: Request & { user?: JwtPayload }, res: R
       resultados.push(ok ? { id: paso.id, ok, recibo_id: r.body?.recibo_id ?? null } : { id: paso.id, ok, error: r.body?.error ?? `HTTP ${r.statusCode}` });
       if (!ok) { frenado = true; break; }
     }
+    registrarTiempo('recibo.lote.aprobar', Date.now() - tPlan);
     console.log(`[lote] ${user.sub} aprobó ${resultados.filter(x => x.ok).length} de ${resultados.length}${frenado ? ' (frenado)' : ''}`);
     res.json({ ok: true, tope: tope(), plan, resultados, frenado });
   } catch (err) {

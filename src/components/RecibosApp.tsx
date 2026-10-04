@@ -357,6 +357,43 @@ function LoteMercadoPago({ clientNameByCod, onCerrar }: { clientNameByCod: Map<s
     );
 }
 
+/**
+ * Recibos que emitió la app y que InfoManager ya no tiene (S32 · mejora 7, 04/10/2026): se borraron
+ * o anularon allá después de emitirse, y la app los seguía mostrando como imputados (3 en
+ * septiembre). Es un informe para la oficina: no frena nada, por eso va plegado.
+ */
+function ControlRecibosIM({ clientNameByCod }: { clientNameByCod: Map<string, string> }) {
+    const [faltan, setFaltan] = useState<Array<{ id: string; cod_cliente: number; monto: number; fecha_comprobante: string | null; infomanager_recibo_id: string | null; reviewed_by_nombre?: string | null }>>([]);
+    const [abierto, setAbierto] = useState(false);
+    useEffect(() => {
+        let vivo = true;
+        fetch('/api/recibos/control-im', { headers: authHeaders() })
+            .then(r => r.json())
+            .then(d => { if (vivo && d?.ok) setFaltan(d.faltan ?? []); })
+            .catch(() => { /* es un informe: si falla, no se muestra */ });
+        return () => { vivo = false; };
+    }, []);
+    if (!faltan.length) return null;
+    return (
+        <div className="rec-control-im">
+            <button type="button" className="rec-control-im-chip" onClick={() => setAbierto(a => !a)} aria-expanded={abierto}
+                title="Se borraron o anularon en InfoManager después de emitirse. La app los sigue mostrando como imputados: revisalos en IM.">
+                <AlertCircle size={13} /> {faltan.length} {faltan.length === 1 ? 'recibo' : 'recibos'} de la app ya no {faltan.length === 1 ? 'está' : 'están'} en InfoManager
+            </button>
+            {abierto && (
+                <ul>
+                    {faltan.map(f => (
+                        <li key={f.id}>
+                            {clientNameByCod.get(String(f.cod_cliente)) ?? `Cliente ${f.cod_cliente}`} · {formatMoneyExact(f.monto)} · {f.fecha_comprobante ?? '—'} · recibo IM {f.infomanager_recibo_id}
+                            {f.reviewed_by_nombre ? ` · aprobó ${f.reviewed_by_nombre}` : ''}
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+}
+
 function RecibosList({ isBackoffice, viewAll, clientNameByCod, onOpenDetail, onUpload }: { isBackoffice: boolean; viewAll: boolean; clientNameByCod: Map<string, string>; onOpenDetail: (id: string, pendientes: string[]) => void; onUpload: () => void }) {
     const [items, setItems] = useState<ReciboRow[]>([]);
     /**
@@ -483,6 +520,7 @@ function RecibosList({ isBackoffice, viewAll, clientNameByCod, onOpenDetail, onU
                     {mesesDisponibles.map(m => <option key={m.valor} value={m.valor}>{m.texto}</option>)}
                 </select>
             </div>
+            {isBackoffice && <ControlRecibosIM clientNameByCod={clientNameByCod} />}
             {isBackoffice && filter === 'pendiente_revision' && !verLote && (
                 <button className="rec-chip rec-lote-abrir" onClick={() => setVerLote(true)} title="Aprobar de una vez los pagos que MercadoPago ya verificó">
                     <Check size={14} /> Aprobar en lote los verificados por MercadoPago
