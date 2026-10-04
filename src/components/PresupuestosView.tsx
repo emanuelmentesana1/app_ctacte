@@ -384,8 +384,9 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
         return [
             {
                 clave: 'por-debajo-de-lista', titulo: 'Por debajo de lista', para: 'Mati: el vendedor usó una lista más barata de la que corresponde',
-                columnas: ['Fecha', 'PR', 'Cliente', 'Qué pasó', 'Margen que se pierde'],
-                filas: bajoLista.map(p => [dia(p.fecha), p.im_numero ?? '—', p.cliente_nombre, p.avisos.join(' · '), money(p.gravedad.pierde_margen)]),
+                // pierde_margen cuenta los artículos en una lista más barata: no son pesos.
+                columnas: ['Fecha', 'PR', 'Cliente', 'Qué pasó', 'Artículos'],
+                filas: bajoLista.map(p => [dia(p.fecha), p.im_numero ?? '—', p.cliente_nombre, p.avisos.join(' · '), p.gravedad.pierde_margen]),
                 vacio: 'Ningún presupuesto del rango quedó por debajo de su lista.',
             },
             {

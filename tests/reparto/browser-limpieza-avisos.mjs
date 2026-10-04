@@ -8,8 +8,10 @@ import {browser,results,out,row,reply,presupuestos,setup,assert,test} from './br
  * Regla: un aviso visible por pantalla, primero lo que frena. Lo informativo va a un ⓘ, el "listo"
  * de una acción se va solo a los 5 s, y lo que tiene que arreglar otra persona va a un informe.
  */
-const bajoLista = { ...row('101', 'CLIENTE ALFA'), gravedad: { pierde_margen: 12000, cobra_de_mas: 0 },
-  avisos: ['ALPISTE: lista 13 en vez de 12'], revision: { estado: 'aprobado', observacion: null, revisado_at: '2026-09-10T12:00:00Z' },
+// 🪤 pierde_margen CUENTA artículos en una lista más barata; no son pesos (el 04/10 el informe
+// salió en producción con "$21").
+const bajoLista = { ...row('101', 'CLIENTE ALFA'), gravedad: { pierde_margen: 2, cobra_de_mas: 0 },
+  avisos: ['ALPISTE: lista 13 en vez de 12', 'MIJO: lista 13 en vez de 12'], revision: { estado: 'aprobado', observacion: null, revisado_at: '2026-09-10T12:00:00Z' },
   hoja_id: 'h1', renglones_sin_peso: 3 };
 const conFaltante = { ...row('102', 'CLIENTE BETA'), faltantes: [{ cod_articulo: 5, descripcion: 'SORGO', pedido: 10, disponible: 2 }] };
 const facturadoPorElPanel = { ...row('103', 'CLIENTE GAMA'), factura: { im_factura_id: '9', numero: 51071, tipo: 'FA B', fecha: null, origen: 'nuestra' } };
@@ -34,7 +36,11 @@ try {
       const dialogo = page.getByRole('dialog', { name: 'Informes del rango' });
       await dialogo.waitFor();
       const lista = await dialogo.innerText();
-      assert(/CLIENTE ALFA/.test(lista) && /ALPISTE/.test(lista) && /12\.000/.test(lista), `El informe de precios no trae el caso: "${lista}"`);
+      assert(/CLIENTE ALFA/.test(lista) && /ALPISTE/.test(lista) && /MIJO/.test(lista), `El informe de precios no trae el caso: "${lista}"`);
+      const columnas = await dialogo.locator('th').allInnerTexts();
+      assert(columnas.some(t => /^artículos$/i.test(t.trim())) && !columnas.some(t => /margen/i.test(t)), `Las columnas no dicen que se cuentan artículos: ${columnas.join(' | ')}`);
+      const cuenta = (await dialogo.locator('tbody tr').first().locator('td').last().innerText()).trim();
+      assert(cuenta === '2', `La última columna no cuenta artículos: "${cuenta}"`);
       assert(/No se manda a nadie/.test(lista), 'No aclara que el informe no se manda');
       await dialogo.getByRole('button', { name: /Sin stock/ }).click();
       const stock = await dialogo.innerText();
