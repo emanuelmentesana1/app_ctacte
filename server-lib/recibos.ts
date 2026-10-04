@@ -12,6 +12,7 @@ import { resolveCuentaCod, debugCuentasResolver, invalidateCuentasCache, listCue
 import { buscarPagoEnMP, todayISO_AR, mpConfigStatus, type MPMatch, type MPCuenta } from './mercadopago.js';
 import { ajustarImputacionIM, validarContraPendientes } from './recibosImputacion.js';
 import { CADUCADO_PREFIX, parseMontoUpload } from './recibosShared.js';
+import { usuarioIMDelAprobador, esRechazoPorUsuario } from './usuarioReciboIM.js';
 import type { JwtPayload } from './auth.js';
 
 // Fuente única de los estados de comprobantes_pago (coincide con el CHECK de la
@@ -436,7 +437,9 @@ export async function aprobarRecibo(req: Request & { user?: JwtPayload }, res: R
     if (!codEmpresa) { res.status(400).json({ error: 'cod_empresa obligatorio' }); return; }
     const medioPago = String(body.medio_pago ?? comp.medio_pago ?? 'transferencia');
     const centroCosto: 'S' | 'N' = body.centro_costo === 'N' ? 'N' : IM_CENTRO_COSTO_DEFAULT;
-    const usuario = String(body.usuario ?? IM_USUARIO);
+    // S32 · mejora 5 (Mati, 04/10/2026): el recibo entra a IM con el usuario de QUIEN APRUEBA, no con
+    // el de la app. El navegador ya no lo elige: sale del perfil de la persona (`usuarios.im_usuario`).
+    const usuario = usuarioIMDelAprobador(await filaUsuario(user), IM_USUARIO);
     const esAnticipo = body.es_anticipo === true;
 
     // ── ANTICIPO: NO se emite por la API de IM ──────────────────────────────
@@ -604,18 +607,26 @@ export async function aprobarRecibo(req: Request & { user?: JwtPayload }, res: R
       comprobantes
     }));
 
-    const imRes = await crearRecibo({
+    const payloadIM = {
       cod_empresa: String(codEmpresa),
       fecha,
       centro_costo: centroCosto,
       cod_cliente: String(comp.cod_cliente),
       usuario,
       detalle: detalleFinal,
-      moneda: 'P',
+      moneda: 'P' as const,
       cotizacion: '1.0',
       pagos,
       comprobantes
-    });
+    };
+    let imRes = await crearRecibo(payloadIM);
+    // 🪤 Si IM rechaza ESE usuario (no existe o no tiene permiso), se reintenta UNA vez con el de la
+    // app: mejor un recibo emitido con el usuario de siempre que la cobranza trabada. Sólo ante un
+    // rechazo explícito: sin respuesta no se sabe si el recibo entró, y ahí no se reintenta nunca.
+    if (!imRes.ok && !imRes.sinRespuesta && usuario !== IM_USUARIO && esRechazoPorUsuario(imRes.raw)) {
+      console.warn(`[aprobar] IM rechazó el usuario "${usuario}" (${JSON.stringify(imRes.raw).slice(0, 200)}): reintento con "${IM_USUARIO}"`);
+      imRes = await crearRecibo({ ...payloadIM, usuario: IM_USUARIO });
+    }
 
     // Si IM devolvió una fecha distinta a la que enviamos, lo logueamos para
     // detectar el bug "IM ignora el campo fecha y usa la del servidor".

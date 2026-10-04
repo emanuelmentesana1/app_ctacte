@@ -260,6 +260,103 @@ const VENDOR_NAMES: Record<number, string> = {
 };
 const vendorLabel = (cod: number): string => VENDOR_NAMES[cod] ?? `Vendedor #${cod}`;
 
+/** Lo que contesta POST /api/recibos/lote. */
+interface PasoLote { id: string; cod_cliente: number; monto: number; fecha: string | null; estado: 'listo' | 'salteado' | 'en_espera'; motivo?: string; comprobantes?: Array<{ id: string; importe_a_pagar: number }> }
+
+/**
+ * Aprobar EN LOTE los pagos que MercadoPago ya verificó (S32 · mejora 4, Mati 04/10/2026). Primero
+ * se ve el plan —qué entra, con qué imputación, y qué no y por qué— y recién ahí se aprueba. Cada
+ * recibo pasa por la misma aprobación de siempre; se frena en el primer problema.
+ */
+function LoteMercadoPago({ clientNameByCod, onCerrar }: { clientNameByCod: Map<string, string>; onCerrar: (huboCambios: boolean) => void }) {
+    const [plan, setPlan] = useState<PasoLote[] | null>(null);
+    const [tope, setTope] = useState(0);
+    const [cargando, setCargando] = useState(true);
+    const [aprobando, setAprobando] = useState(false);
+    const [resultados, setResultados] = useState<Array<{ id: string; ok: boolean; recibo_id?: string | null; error?: string }> | null>(null);
+    const [frenado, setFrenado] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const nombre = (cod: number) => clientNameByCod.get(String(cod)) ?? `Cliente ${cod}`;
+    useEffect(() => {
+        let vivo = true;
+        (async () => {
+            try {
+                const res = await fetch('/api/recibos/lote', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'plan' }) });
+                const d = await res.json();
+                if (!vivo) return;
+                if (!res.ok || !d?.ok) throw new Error(d?.error ?? `HTTP ${res.status}`);
+                setPlan(d.plan ?? []); setTope(Number(d.tope) || 0);
+            } catch (e) { if (vivo) setError(e instanceof Error ? e.message : 'No se pudo armar el plan'); }
+            finally { if (vivo) setCargando(false); }
+        })();
+        return () => { vivo = false; };
+    }, []);
+    const listos = (plan ?? []).filter(p => p.estado === 'listo');
+    const salteados = (plan ?? []).filter(p => p.estado === 'salteado');
+    const enEspera = (plan ?? []).filter(p => p.estado === 'en_espera');
+    const aprobar = async () => {
+        setAprobando(true); setError(null);
+        try {
+            const res = await fetch('/api/recibos/lote', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'aprobar', ids: listos.map(p => p.id) }) });
+            const d = await res.json();
+            if (!res.ok || !d?.ok) throw new Error(d?.error ?? `HTTP ${res.status}`);
+            setResultados(d.resultados ?? []); setFrenado(d.frenado === true);
+        } catch (e) { setError(e instanceof Error ? e.message : 'No se pudo aprobar'); }
+        finally { setAprobando(false); }
+    };
+    return (
+        <div className="rec-lote">
+            <div className="rec-lote-head">
+                <strong>Aprobar en lote: pagos verificados por MercadoPago</strong>
+                <span className="rec-lote-info" title={`Entra sólo lo que no necesita criterio: verificado por MercadoPago, sin observaciones, que se cubre con facturas pendientes (de la más vieja a la más nueva) y sin un posible duplicado. Piloto: hasta ${tope} por tanda.`}>
+                    <AlertCircle size={13} /> Piloto: hasta {tope} por tanda
+                </span>
+                <button className="recibos-icon-btn" onClick={() => onCerrar(!!resultados?.some(r => r.ok))} aria-label="Cerrar"><X size={16} /></button>
+            </div>
+            {cargando && <div className="rec-loading"><Loader2 size={16} className="spin" /> Armando el plan…</div>}
+            {error && <div className="rec-msg rec-msg--err">{error}</div>}
+            {plan && !resultados && (
+                <>
+                    {!listos.length && <p className="rec-lote-vacio">No hay pagos para aprobar en lote ahora.</p>}
+                    {listos.map(p => (
+                        <div className="rec-lote-listo" key={p.id}>
+                            <span><strong>{nombre(p.cod_cliente)}</strong> · {formatMoneyExact(p.monto)}</span>
+                            <small>Se imputa a: {(p.comprobantes ?? []).map(c => `#${c.id} ${formatMoneyExact(c.importe_a_pagar)}`).join(' + ')}</small>
+                        </div>
+                    ))}
+                    {enEspera.length > 0 && <p className="rec-lote-espera">{enEspera.length} más quedan para la próxima tanda (tope del piloto).</p>}
+                    {salteados.length > 0 && (
+                        <details className="rec-lote-salteados">
+                            <summary>{salteados.length} para revisar uno por uno</summary>
+                            <ul>{salteados.map(p => <li key={p.id}>{nombre(p.cod_cliente)} · {formatMoneyExact(p.monto)} — {p.motivo}</li>)}</ul>
+                        </details>
+                    )}
+                    {listos.length > 0 && (
+                        <button className="btn-primary" onClick={aprobar} disabled={aprobando}>
+                            {aprobando ? <><Loader2 size={14} className="spin" /> Emitiendo…</> : <><Check size={14} /> Aprobar {listos.length}</>}
+                        </button>
+                    )}
+                </>
+            )}
+            {resultados && (
+                <div className="rec-lote-resultados">
+                    {resultados.map(r => {
+                        const p = (plan ?? []).find(x => x.id === r.id);
+                        return (
+                            <div key={r.id} className={`rec-lote-resultado ${r.ok ? 'ok' : 'mal'}`}>
+                                {r.ok ? <Check size={14} /> : <AlertCircle size={14} />} {p ? nombre(p.cod_cliente) : r.id}
+                                {r.ok ? ` · recibo InfoManager ${r.recibo_id ?? ''}` : ` · ${r.error}`}
+                            </div>
+                        );
+                    })}
+                    {frenado && <div className="rec-msg rec-msg--err">Se frenó en el primer problema: el resto quedó pendiente, sin tocar.</div>}
+                    <button className="btn-secondary" onClick={() => onCerrar(resultados.some(r => r.ok))}>Listo</button>
+                </div>
+            )}
+        </div>
+    );
+}
+
 function RecibosList({ isBackoffice, viewAll, clientNameByCod, onOpenDetail, onUpload }: { isBackoffice: boolean; viewAll: boolean; clientNameByCod: Map<string, string>; onOpenDetail: (id: string, pendientes: string[]) => void; onUpload: () => void }) {
     const [items, setItems] = useState<ReciboRow[]>([]);
     /**
@@ -310,6 +407,7 @@ function RecibosList({ isBackoffice, viewAll, clientNameByCod, onOpenDetail, onU
      */
     const [mes, setMes] = useState<string>('');
     const [truncado, setTruncado] = useState(false);
+    const [verLote, setVerLote] = useState(false);
     /** Los últimos 12 meses, armados en el momento: no hay lista que mantener. */
     const mesesDisponibles = useMemo(() => {
         const hoy = new Date();
@@ -385,6 +483,12 @@ function RecibosList({ isBackoffice, viewAll, clientNameByCod, onOpenDetail, onU
                     {mesesDisponibles.map(m => <option key={m.valor} value={m.valor}>{m.texto}</option>)}
                 </select>
             </div>
+            {isBackoffice && filter === 'pendiente_revision' && !verLote && (
+                <button className="rec-chip rec-lote-abrir" onClick={() => setVerLote(true)} title="Aprobar de una vez los pagos que MercadoPago ya verificó">
+                    <Check size={14} /> Aprobar en lote los verificados por MercadoPago
+                </button>
+            )}
+            {verLote && <LoteMercadoPago clientNameByCod={clientNameByCod} onCerrar={(cambios) => { setVerLote(false); if (cambios) load(); }} />}
             {truncado && (
                 /* La lista llegó al tope: decirlo, porque una lista cortada en silencio se lee
                    como "no hay más" y ahí se toman decisiones. */

@@ -643,3 +643,19 @@
 .rec-dup-confirma { display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer }
 .rec-dup-confirma input { width: 18px; height: 18px }
 .rec-dup-rechazar { align-self: flex-start }
+
+/* Aprobar en lote los verificados por MercadoPago (S32 · mejora 4). */
+.rec-lote-abrir { align-self: flex-start; font-weight: 600 }
+.rec-lote { border: 1px solid rgba(20,24,20,.12); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: #fff }
+.rec-lote-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.rec-lote-head .recibos-icon-btn { margin-left: auto }
+.rec-lote-info { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #6e7670; border: 1px solid rgba(20,24,20,.12); border-radius: 999px; padding: 2px 8px; cursor: help }
+.rec-lote-listo { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid rgba(20,24,20,.06); font-size: 13px }
+.rec-lote-listo small { color: #6e7670 }
+.rec-lote-espera, .rec-lote-vacio { margin: 0; font-size: 13px; color: #6e7670 }
+.rec-lote-salteados { font-size: 13px }
+.rec-lote-salteados ul { margin: 4px 0 0; padding-left: 18px }
+.rec-lote-resultados { display: flex; flex-direction: column; gap: 6px }
+.rec-lote-resultado { display: flex; align-items: center; gap: 6px; font-size: 13px }
+.rec-lote-resultado.ok { color: #0B6B34 }
+.rec-lote-resultado.mal { color: #A83E2B }

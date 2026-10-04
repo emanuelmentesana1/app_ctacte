@@ -36,7 +36,7 @@ const invoices = [
   { COD_CLIENT: '815', CLIENTES_N: 'CLIENTE BETA', SALDO: 80_000, DIAS_EMISI: 4 },
 ];
 
-async function abrir(user, { alAprobar, duplicados } = {}) {
+async function abrir(user, { alAprobar, duplicados, lote } = {}) {
   const ctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   await ctx.addInitScript(() => localStorage.setItem('auth_token', 'audit-local-only'));
   const page = await ctx.newPage();
@@ -57,6 +57,10 @@ async function abrir(user, { alAprobar, duplicados } = {}) {
     if (u.pathname === '/api/notificaciones') return reply(route, { ok: true, items: [], notificaciones: [] });
     if (u.pathname === '/api/clientes/lookup') return reply(route, { ok: true, items: clientes });
     if (u.pathname === '/api/recibos/mp-config') return reply(route, { ok: true, activas: 3, total: 3, cuentas: [] });
+    if (u.pathname === '/api/recibos/lote' && metodo === 'POST') {
+      const body = JSON.parse(route.request().postData() || '{}');
+      return reply(route, lote ? lote(body) : { ok: true, tope: 3, plan: [], consultado: { im: true } });
+    }
     if (u.pathname === '/api/recibos/posibles-duplicados') {
       if (!duplicados) return reply(route, { ok: true, app: [], im: [], consultado: { app: true, im: true } });
       return reply(route, { ok: true, ...duplicados(u.searchParams), consultado: { app: true, im: true } });
@@ -171,6 +175,33 @@ try {
       const chip = page.locator('.vs-client[data-client-cod="722"] .vs-pago-revision');
       await chip.waitFor({ timeout: 4000 });
       assert((await chip.innerText()).includes('250'), `El chip no muestra el importe: "${await chip.innerText()}"`);
+    } finally { await ctx.close(); }
+  });
+  await test('Anto: aprueba en lote los verificados por MercadoPago, con el plan a la vista', async () => {
+    const pedidos = [];
+    const lote = (body) => {
+      pedidos.push(body);
+      const plan = [
+        { id: 'r1', cod_cliente: 722, monto: 250_000, fecha: '2026-10-02', estado: 'listo', comprobantes: [{ id: '2001', importe_a_pagar: 100_000 }, { id: '2002', importe_a_pagar: 150_000 }] },
+        { id: 'r2', cod_cliente: 815, monto: 80_000, fecha: '2026-10-02', estado: 'salteado', motivo: 'Tiene observaciones del vendedor: revisalo a mano.' },
+      ];
+      return body.accion === 'plan'
+        ? { ok: true, tope: 3, plan, consultado: { im: true } }
+        : { ok: true, tope: 3, plan, resultados: [{ id: 'r1', ok: true, recibo_id: '58999001' }], frenado: false };
+    };
+    const { page, ctx } = await abrir(anto, { lote });
+    try {
+      await page.locator('button[title="Cargar pago"]').click();
+      await page.locator('.rec-lote-abrir').click();
+      const panel = page.locator('.rec-lote');
+      await panel.locator('.rec-lote-listo', { hasText: 'CLIENTE ALFA' }).waitFor();
+      // Los salteados van plegados (menos ruido); al abrirlos se ve el motivo de cada uno.
+      await panel.locator('.rec-lote-salteados summary').click();
+      assert((await panel.locator('.rec-lote-salteados').innerText()).includes('observaciones'), 'No muestra por qué se salteó el de CLIENTE BETA');
+      await panel.locator('button', { hasText: 'Aprobar 1' }).click();
+      await panel.locator('.rec-lote-resultado', { hasText: '58999001' }).waitFor({ timeout: 4000 });
+      const aprobar = pedidos.find(p => p.accion === 'aprobar');
+      assert(aprobar && JSON.stringify(aprobar.ids) === '["r1"]', `Mandó otros ids: ${JSON.stringify(aprobar)}`);
     } finally { await ctx.close(); }
   });
 } finally {

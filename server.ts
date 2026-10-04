@@ -30,6 +30,7 @@ import {
   reverificarMP, elegirMatchMP, procesarColaMP, caducarRecibosPendientes, mpConfig
 } from './server-lib/recibos.js';
 import { posiblesDuplicadosRecibo } from './server-lib/recibosDuplicados.js';
+import { aprobarEnLote } from './server-lib/recibosLote.js';
 import { listGoals, setGoal, syncVentasNow, setMonthConfig, listClientesObjetivo, debugClienteAvance, getGoalsSnapshot, botGoals, codsVendedoresActivos } from './server-lib/goals.js';
 import { armarAvisoDeuda, formatearAvisoDeuda, publicarEnSlack } from './server-lib/avisoDeuda.js';
 import { hoyArgentina } from './src/utils/hoyArgentina.js';
@@ -672,6 +673,8 @@ function cleanupUploadedFile(req: express.Request, res: express.Response, next: 
 
 app.post('/api/recibos/upload', requireJwt, upload.single('foto'), cleanupUploadedFile, (req: any, res) => uploadRecibo(req, res));
 app.get('/api/recibos', requireJwt, (req: any, res) => listRecibos(req, res));
+// Aprobar en lote los pagos verificados por MercadoPago (S32 · mejora 4). Cada uno pasa por aprobarRecibo.
+app.post('/api/recibos/lote', requireJwt, (req: any, res) => aprobarEnLote(req, res));
 // IMPORTANTE: antes de /api/recibos/:id para que ":id" no capture "mp-config".
 app.get('/api/recibos/mp-config', requireJwt, (req: any, res) => mpConfig(req, res));
 // ¿Este pago ya figura en la app o en IM? Aviso antes de cargar y de aprobar (S32).
