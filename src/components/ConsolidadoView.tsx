@@ -1,6 +1,6 @@
 import { useLecturaVigente } from '../utils/useLecturaVigente';
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, AlertTriangle, Boxes, ChevronRight, RefreshCw, Search, X } from 'lucide-react';
+import { Loader2, AlertTriangle, Boxes, ChevronRight, RefreshCw, Search, X, Info } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import { coincide } from '../utils/buscar';
 import './ConsolidadoView.css';
@@ -138,14 +138,13 @@ export function ConsolidadoView({ desde, hasta }: { desde: string; hasta: string
                 </label>
                 <label className="co-check">
                     <input type="checkbox" checked={soloFaltantes} onChange={e => setSoloFaltantes(e.target.checked)} />
-                    Sólo lo que no alcanza
+                    {/* 🔄 04/10/2026: el chip rojo "N sin stock suficiente" se fue. El número queda acá, en el
+                        filtro, y el detalle para el depósito en Presupuestos › Informes. */}
+                    Sólo lo que no alcanza{totales?.faltantes ? ` (${totales.faltantes})` : ''}
                 </label>
                 {totales && (
                     <div className="co-resumen">
                         <span><b>{totales.articulos}</b> artículos en el rango</span>
-                        {totales.faltantes > 0 && (
-                            <span className="co-chip grave"><AlertTriangle size={13} /> {totales.faltantes} sin stock suficiente</span>
-                        )}
                     </div>
                 )}
             </div>
@@ -234,17 +233,11 @@ export function ConsolidadoView({ desde, hasta }: { desde: string; hasta: string
 
                         {abierto === a.cod_articulo && (
                             <div className="co-quienes">
-                                {falta && (
-                                    <p className="co-ayuda">
-                                        No alcanza para todos. La columna <b>sugerido</b> reparte lo que hay en proporción
-                                        a lo que pidió cada uno — es una propuesta para arrancar, la decisión es de la oficina.
-                                    </p>
-                                )}
                                 <table>
                                     <thead>
                                         <tr>
                                             <th>Cliente</th><th className="n">Pidió</th>
-                                            {falta && <th className="n">Sugerido</th>}
+                                            {falta && <th className="n" title="No alcanza para todos: reparte lo que hay en proporción a lo que pidió cada uno. Es una propuesta para arrancar; la decisión es de la oficina.">Sugerido <Info size={11} /></th>}
                                             <th>Estado</th>
                                         </tr>
                                     </thead>
@@ -261,9 +254,8 @@ export function ConsolidadoView({ desde, hasta }: { desde: string; hasta: string
                                                 </td>
                                                 {falta && <td className="n co-sug">{num(q.sugerido)}</td>}
                                                 <td>
-                                                    {q.revision_estado === 'aprobado' && <span className="co-tag ok">aprobado</span>}
+                                                    {/* Sólo lo que frena: "aprobado" y "sin revisar" eran ruido (04/10/2026). */}
                                                     {q.revision_estado === 'observado' && <span className="co-tag obs">observado</span>}
-                                                    {!q.revision_estado && <span className="co-tag tenue">sin revisar</span>}
                                                 </td>
                                             </tr>
                                         ))}
@@ -271,9 +263,8 @@ export function ConsolidadoView({ desde, hasta }: { desde: string; hasta: string
                                 </table>
                                 {a.quienes_facturados.length > 0 && (
                                     <>
-                                        <p className="co-ayuda">
-                                            Ya facturado: esta mercadería <b>ya salió del depósito</b> y su remito ya
-                                            descontó el stock, así que no entra en el reparto de lo que queda.
+                                        <p className="co-ayuda" title="Esta mercadería ya salió del depósito y su remito ya descontó el stock, así que no entra en el reparto de lo que queda.">
+                                            <b>Ya facturado</b> <Info size={11} />
                                         </p>
                                         <table>
                                             <thead><tr><th>Cliente</th><th className="n">Se llevó</th></tr></thead>

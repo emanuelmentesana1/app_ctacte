@@ -1,7 +1,7 @@
 import { useReparto, useOperacionReparto } from './RepartoContext';
 import { useLecturaVigente } from '../utils/useLecturaVigente';
 import { useEffect, useMemo, useState } from 'react';
-import { Save, Trash2, Plus, Search, AlertTriangle, Loader2, X, Truck } from 'lucide-react';
+import { Save, Trash2, Plus, Search, AlertTriangle, Loader2, X, Truck, Info } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import './EditorPresupuesto.css';
 import { useControlListas } from '../utils/useControlListas';
@@ -281,14 +281,8 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
         // 🪤 Sin precio InfoManager graba el renglón en $0 — no lo busca en la lista.
         const sinPrecio = items.find(i => !(Number(i.precio) > 0));
         if (sinPrecio) { setError(`"${sinPrecio.descripcion}" no tiene precio. Ponelo antes de guardar: InfoManager lo grabaría en $0.`); return; }
-        const nombreNuevo = clientes.find(c => c.cod === codCliente)?.nombre ?? `cliente ${codCliente}`;
-        if (seRecrea && !confirm(
-            (cambiaCliente
-                ? `El pedido pasa de ${clienteOriginal?.nombre} a ${nombreNuevo}.\n\nLos precios y el vendedor quedan como están.\n\n`
-                : `Este cambio no se puede hacer sobre el mismo presupuesto: InfoManager sólo deja corregir cantidades.\n\n`) +
-            `Se va a crear un presupuesto NUEVO con estos datos y se va a anular el ${numero ?? ''}.\n\n` +
-            (pendientesIMOriginales.length ? `Lo escrito a mano en InfoManager que va sin cobrar pasa a la app y sigue viajando con el pedido.\n\n` : '') +
-            `El número cambia. ¿Seguimos?`)) return;
+        // 🔄 04/10/2026: sin ventana de confirmación. Decía lo mismo que el cartel de arriba, que
+        // ahora lleva también el cambio de cliente, y el botón ya dice "rehace el presupuesto".
 
         if (!operacion.comenzar()) return;
         invalidarBusqueda(); setBuscando(false); setGuardando(true); setError(null);
@@ -343,6 +337,8 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                     <AlertTriangle size={14} />
                     <span>
                         Al guardar se <b>crea un presupuesto nuevo y se anula el {numero ?? 'actual'}</b>. El número cambia.
+                        {cambiaCliente && <> El pedido pasa de {clienteOriginal?.nombre} a {clientes.find(c => c.cod === codCliente)?.nombre ?? `cliente ${codCliente}`}; los precios y el vendedor quedan como están.</>}
+                        {pendientesIMOriginales.length > 0 && <> Lo escrito a mano en InfoManager que va sin cobrar pasa a la app y sigue viajando con el pedido.</>}
                     </span>
                 </div>
             )}
@@ -422,9 +418,8 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                 camión. No se factura ni descuenta stock: sale en el remito y en la hoja de ruta. */}
             {(pendientes.length > 0 || pendientesEditables || !!pendientesError) && (
                 <div className="ed-pendientes">
-                    <div className="ed-pend-titulo">
-                        <Truck size={14} /> <b>Lleva además, ya facturado</b>
-                        <span>no se cobra ni descuenta stock: va al camión y al remito</span>
+                    <div className="ed-pend-titulo" title="No se cobra ni descuenta stock: va al camión y al remito">
+                        <Truck size={14} /> <b>Lleva además, ya facturado</b> <Info size={13} className="ed-ayuda" />
                     </div>
                     {pendientesError && <div className="ed-aviso error"><AlertTriangle size={14} /><span>{pendientesError}</span></div>}
                     {!!pendientes.length && (
@@ -462,9 +457,6 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                     )}
                     {!pendientes.length && pendientesEditables && (
                         <div className="ed-sinres">Nada. Para sumar mercadería ya facturada, buscala abajo y tocá «ya facturado».</div>
-                    )}
-                    {!pendientesDisponibles && pendientesOriginales !== null && !!pendientes.length && (
-                        <div className="ed-aviso"><AlertTriangle size={14} /><span>Todavía no se pueden cargar desde acá (falta aplicar la migración 055). Si hay que cambiarlos, hacelo en InfoManager.</span></div>
                     )}
                 </div>
             )}

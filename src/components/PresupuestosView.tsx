@@ -4,11 +4,13 @@ import { useLecturaVigente } from '../utils/useLecturaVigente';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     AlertTriangle, Check, CircleAlert, Loader2, RefreshCw, ChevronRight, X, Package,
-    MessageSquare, Printer, Search, Ban, Truck,
+    MessageSquare, Printer, Search, Ban, Truck, Info,
 } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import { coincide } from '../utils/buscar';
 import { EditorPresupuesto, type PendienteEditable } from './EditorPresupuesto';
+import { AvisoTemporal } from './AvisoTemporal';
+import { InformesOficina, type SeccionInforme } from './InformesOficina';
 import { imprimirComprobante } from '../utils/imprimirComprobante';
 import { useRecargarAlVolver } from '../utils/recargarAlVolver';
 import './PresupuestosView.css';
@@ -107,6 +109,9 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
     const [cargando, setCargando] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [aviso, setAviso] = useState<string | null>(null);
+    /** Lo que salió bien después de una acción: se va solo a los 5 s (los errores van en `aviso`). */
+    const [info, setInfo] = useState<string | null>(null);
+    const [verInformes, setVerInformes] = useState(false);
     const [filtro, setFiltro] = useState<Filtro>('sin_revisar');
     /**
      * `reparto.borradores` es un Map pelado: escribirlo no re-renderiza. Esto es sólo el
@@ -141,7 +146,7 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
             });
             const d = await r.json().catch(() => null);
             if (!r.ok) throw new Error(d?.error ?? 'No se pudo anular');
-            setAviso(`Pedido ${d.numero ?? ''} anulado.`);
+            setInfo(`Pedido ${d.numero ?? ''} anulado.`);
             await cargar(true);
         } catch (e: any) {
             setAviso(e?.message ?? 'No se pudo anular');
@@ -347,17 +352,53 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
                                                 refrescarBorradores(v => v + 1);
                                             }}
                                             onGuardado={(r) => {
-                                                setAviso(r.aviso ?? (r.modo === 'recreado'
+                                                // Lo que avisa el server (algo quedó a medias) se queda; el "listo" se va solo.
+                                                if (r.aviso) setAviso(r.aviso);
+                                                else setInfo(r.modo === 'recreado'
                                                     ? `Listo: se rehizo el presupuesto y ahora es el ${r.im_numero ?? ''}. Como cambió, quedó sin revisar.`
                                                     : r.modo === 'pendientes'
                                                         ? 'Listo: se guardó lo que lleva sin cobrar. InfoManager no se tocó.'
-                                                        : 'Listo: cantidades corregidas en InfoManager.'));
+                                                        : 'Listo: cantidades corregidas en InfoManager.');
                                                 reparto.borradores.delete(`base:${base.id}`);
                                                 controlDetalle.current.invalidar(); abiertoRef.current = null; setAbierto(null); setDetalle(null);
                                                 void cargar(true);
                                             }}
                                         /></>);
     }
+    /**
+     * 🔄 LOS CHIPS DE ARRIBA SE FUERON A UN INFORME (04/10/2026). Contaban TODO el rango, también
+     * lo ya facturado: el 02/10 decían "6 por debajo de lista · 1 con cantidad rara · 43 ya
+     * facturados · 23 sin stock" con 2 presupuestos para facturar. Lo que Jo tiene que mirar ya
+     * está en la fila (el badge de problemas); lo que es de otra persona queda en el informe:
+     * los precios por debajo de lista para Mati y los faltantes para el depósito.
+     */
+    const informes = useMemo<SeccionInforme[]>(() => {
+        const bajoLista = filas.filter(p => (p.gravedad?.pierde_margen ?? 0) > 0);
+        const faltan = new Map<number, { descripcion: string; pedido: number; disponible: number | null; pedidos: Set<string> }>();
+        for (const p of filas) for (const f of p.faltantes ?? []) {
+            const a = faltan.get(f.cod_articulo) ?? { descripcion: f.descripcion, pedido: 0, disponible: f.disponible, pedidos: new Set<string>() };
+            a.pedido += Number(f.pedido) || 0;
+            a.pedidos.add(p.im_comprobante_id);
+            faltan.set(f.cod_articulo, a);
+        }
+        return [
+            {
+                clave: 'por-debajo-de-lista', titulo: 'Por debajo de lista', para: 'Mati: el vendedor usó una lista más barata de la que corresponde',
+                columnas: ['Fecha', 'PR', 'Cliente', 'Qué pasó', 'Margen que se pierde'],
+                filas: bajoLista.map(p => [dia(p.fecha), p.im_numero ?? '—', p.cliente_nombre, p.avisos.join(' · '), money(p.gravedad.pierde_margen)]),
+                vacio: 'Ningún presupuesto del rango quedó por debajo de su lista.',
+            },
+            {
+                clave: 'sin-stock', titulo: 'Sin stock', para: 'el depósito: piden más de lo que hay',
+                columnas: ['Código', 'Artículo', 'Piden', 'Hay', 'Faltan', 'Pedidos'],
+                filas: [...faltan.entries()].sort((x, y) => x[1].descripcion.localeCompare(y[1].descripcion)).map(([cod, a]) => [
+                    cod, a.descripcion, a.pedido.toLocaleString('es-AR'), a.disponible == null ? '?' : a.disponible.toLocaleString('es-AR'),
+                    a.disponible == null ? '?' : Math.max(0, a.pedido - a.disponible).toLocaleString('es-AR'), a.pedidos.size,
+                ]),
+                vacio: 'No falta stock para nada de lo pedido en el rango.',
+            },
+        ];
+    }, [filas]);
     // 🪤 Se deriva en CADA render, sin memoizar: el Map también se limpia desde `onGuardado` y al
     // cerrar sesión, y un `useMemo` atado al contador no vería esos cambios. El contador es sólo
     // el disparador del render, no la fuente de verdad.
@@ -388,25 +429,11 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
                     <span><b>{filas.length}</b> presupuestos</span>
                     <span><b>{money(resumen?.totales?.importe ?? 0)}</b></span>
                     <span><b>{kilos(resumen?.totales?.kg ?? 0)}</b></span>
-                    {(resumen?.pierde_margen ?? 0) > 0 && (
-                        <span className="pr-chip grave" title="El vendedor usó una lista más barata de la que corresponde: la empresa pierde margen">
-                            <AlertTriangle size={13} /> {resumen.pierde_margen} por debajo de lista
-                        </span>
-                    )}
-                    {(resumen?.con_cantidad_rara ?? 0) > 0 && (
-                        <span className="pr-chip grave" title="La cantidad coincide con los kilos del bulto: puede que hayan cargado kilos donde van bultos">
-                            <AlertTriangle size={13} /> {resumen.con_cantidad_rara} con cantidad rara
-                        </span>
-                    )}
-                    {(resumen?.ya_facturados ?? 0) > 0 && (
-                        <span className="pr-chip facturado" title="Ya tienen su factura emitida: no hay que volver a facturarlos">
-                            <Check size={13} /> {resumen.ya_facturados} ya facturados
-                        </span>
-                    )}
-                    {(resumen?.sin_stock ?? 0) > 0 && (
-                        <span className="pr-chip" title="Piden más de lo que hay en el depósito">
-                            {resumen.sin_stock} sin stock
-                        </span>
+                    {!!filas.length && (
+                        <button type="button" className="pr-informes" onClick={() => setVerInformes(true)}
+                                title="Lo que tiene que ver otra persona: precios por debajo de lista (Mati) y faltantes de stock (depósito)">
+                            <Info size={13} /> Informes
+                        </button>
                     )}
                 </div>
             </div>
@@ -434,6 +461,8 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
 
             {aviso && <div className="pr-aviso"><AlertTriangle size={15} /><span>{aviso}</span><button onClick={() => setAviso(null)}><X size={14} /></button></div>}
             {error && <div className="pr-aviso error"><AlertTriangle size={15} /><span>{error}</span></div>}
+            <AvisoTemporal texto={info} onCerrar={() => setInfo(null)} />
+            {verInformes && <InformesOficina titulo="Informes del rango" secciones={informes} onCerrar={() => setVerInformes(false)} />}
 
             {cargando && !filas.length && <div className="pr-cargando"><Loader2 className="spin" size={20} /> Trayendo los presupuestos de InfoManager…</div>}
             {!cargando && !error && !visibles.length && (
@@ -453,15 +482,13 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
                                 <div className="pr-fila-info">
                                     <div className="pr-cli">
                                         <span>{p.cliente_nombre}</span>
-                                        {/* 🔴 Lo primero que hay que ver: si ya tiene factura, no se
-                                            vuelve a facturar. */}
-                                        {p.factura && (
-                                            <span className={`pr-badge ${p.factura.origen === 'nuestra' ? 'facturado' : 'aviso'}`}
-                                                  title={p.factura.origen === 'nuestra'
-                                                      ? 'Se facturó desde el panel'
-                                                      : `Hay una ${p.factura.tipo} del mismo cliente por el mismo importe${p.factura.fecha ? ` (${p.factura.fecha})` : ''}. InfoManager no guarda el vínculo, así que conviene verificarlo antes de facturar.`}>
-                                                <Check size={11} /> {p.factura.tipo} {p.factura.numero ?? ''}
-                                                {p.factura.origen === 'deducida' && ' ?'}
+                                        {/* 🔴 Si parece que ya tiene factura, no se vuelve a facturar. La
+                                            que emitió el panel ya no lleva badge (04/10/2026): sale del
+                                            filtro "Para facturar" y en "Todos" la fila tiene su botón FA. */}
+                                        {p.factura?.origen === 'deducida' && (
+                                            <span className="pr-badge aviso"
+                                                  title={`Hay una ${p.factura.tipo} del mismo cliente por el mismo importe${p.factura.fecha ? ` (${p.factura.fecha})` : ''}. InfoManager no guarda el vínculo, así que conviene verificarlo antes de facturar.`}>
+                                                <Check size={11} /> {p.factura.tipo} {p.factura.numero ?? ''} ?
                                             </span>
                                         )}
                                         {/**
@@ -496,16 +523,13 @@ export function PresupuestosView({ desde, hasta }: { desde: string; hasta: strin
                                                 </span>
                                             );
                                         })()}
-                                        {rev?.estado === 'aprobado' && <span className="pr-badge ok"><Check size={11} /> aprobado</span>}
+                                        {/* 🔄 04/10/2026: se fueron "aprobado" (ese paso ya no existe), "en
+                                            una hoja" y "sin peso" (es del catálogo, no de Jo). */}
                                         {rev?.estado === 'observado' && <span className="pr-badge obs"><CircleAlert size={11} /> observado</span>}
-                                        {p.hoja_id && <span className="pr-badge tenue">en una hoja</span>}
                                     </div>
                                     <div className="pr-meta">
                                         PR {p.im_numero ?? '—'} · {dia(p.fecha)} · {money(p.total)} · {p.bultos} bultos · {kilos(p.kg)}
                                         {p.zona && <> · {p.zona}</>}
-                                        {p.renglones_sin_peso > 0 && (
-                                            <span className="pr-sinpeso" title="Renglones sin peso en el catálogo: los kilos son un mínimo"> · {p.renglones_sin_peso} sin peso</span>
-                                        )}
                                     </div>
                                     {/* 🔑 Dos observaciones distintas y no se pueden confundir: ésta es la
                                         del VENDEDOR y viaja en el presupuesto de InfoManager — es la que

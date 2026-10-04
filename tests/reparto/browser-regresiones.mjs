@@ -276,9 +276,13 @@ try {
       await page.locator('.pr-abrir').nth(0).click();
       await page.locator('input[aria-label="Cantidad ya facturada de MEZCLA GALLO PREM"]').fill('200');
       await page.getByText('Al guardar se',{exact:false}).waitFor();
+      // 🔄 04/10/2026 (limpieza de avisos): sin ventana de confirmación. El aviso va en el cartel,
+      // que se lee ANTES de guardar, y el botón ya dice "rehace el presupuesto".
+      const cartel=await page.locator('.pr-detalle .ed-aviso',{hasText:'Al guardar se'}).innerText();
+      assert(/pasa a la app/.test(cartel),`El cartel no dice que lo escrito en IM pasa a la app: "${cartel}"`);
       await page.locator('.pr-detalle .ed-pie button').last().click();
       await page.waitForTimeout(200);
-      assert(/pasa a la app/.test(mensaje),`La confirmación no dice que lo escrito en IM pasa a la app: "${mensaje}"`);
+      assert(!mensaje,`Volvió la ventana de confirmación: "${mensaje}"`);
       assert(saved?.pendientes?.[0]?.cantidad===200&&saved.pendientes[0].origen==='im','No viajó el cambio de lo escrito en IM');
     } finally { await ctx.close(); }
   });

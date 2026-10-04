@@ -1,0 +1,10 @@
+/* Abajo y al centro, encima de la lista: no empuja la pantalla y se va solo. */
+.aviso-temporal {
+    position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%); z-index: 60;
+    display: flex; align-items: center; gap: 0.5rem; max-width: min(92vw, 640px);
+    background: #06652F; color: #fff; border-radius: var(--radius-md, 10px);
+    padding: 0.55rem 0.8rem; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+    font-size: 0.88rem; line-height: 1.35;
+}
+.aviso-temporal svg { flex-shrink: 0; }
+.aviso-temporal button { margin-left: 0.25rem; border: none; background: transparent; color: inherit; cursor: pointer; opacity: 0.85; }
