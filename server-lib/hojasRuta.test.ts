@@ -28,7 +28,8 @@ vi.mock('./repartoDatos.js', async original => ({ ...(await original<any>()),
 }));
 vi.mock('./supabase.js', () => ({ sb: m.sbMock, TENANT_ID: 'test-tenant', hasSupabase: () => true }));
 
-const { crearHoja, asignarPedidos, listarCamiones } = await import('./hojasRuta.js');
+const { crearHoja, asignarPedidos, listarCamiones, arrastreDelDia } = await import('./hojasRuta.js');
+const { fetchVentas } = await import('./infomanager.js');
 
 let tablas: Record<string, any> = {};
 let insertados: Array<[string, any]> = [];
@@ -183,5 +184,35 @@ describe('crear hoja', () => {
     const r = await llamar(crearHoja, { body: { numero: 3394 } });
     expect(r.status).toBe(409);
     expect(r.body.error).toContain('3394');
+  });
+});
+
+/**
+ * ⏱️ 04/10/2026 — EL AVISO DE ARRASTRE NO RELEE 15 DÍAS DE IM EN CADA APERTURA.
+ *
+ * Medido en producción: 24-28 s y 12-14 llamadas a IM cada vez que se abre Hojas de ruta (15 días
+ * de /ventas no entran en el cache, que es de hasta 10). Son remitos de días anteriores: casi no
+ * cambian. Lo de IM se guarda 10 minutos; lo que dice si ya está en una hoja o en retiros sale de
+ * la base en cada apertura, así que asignar un remito lo saca del aviso en el momento.
+ */
+describe('arrastre', () => {
+  it('⏱️ dos aperturas leen IM una vez, y lo asignado a una hoja sale del aviso enseguida', async () => {
+    const anterior = process.env.HOJAS_RUTA_DESDE;
+    process.env.HOJAS_RUTA_DESDE = 'todo';
+    try {
+      vi.mocked(fetchVentas).mockResolvedValue([
+        { id: '5', tipo_comprobante: 'RE', cod_empresa: 1, anulada: 'N', fecha: '2026-09-07' },
+      ] as any);
+      tablas = {};
+      const q = { desde: '2026-09-10', hasta: '2026-09-10' };
+      const a = await llamar(arrastreDelDia, { query: q });
+      expect(a.body.cantidad).toBe(1);
+      tablas = { hojas_ruta_pedidos: { data: [{ im_comprobante_id: '5' }], error: null } };
+      const b = await llamar(arrastreDelDia, { query: q });
+      expect(b.body.cantidad).toBe(0);
+      expect(fetchVentas).toHaveBeenCalledTimes(1);
+    } finally {
+      if (anterior === undefined) delete process.env.HOJAS_RUTA_DESDE; else process.env.HOJAS_RUTA_DESDE = anterior;
+    }
   });
 });

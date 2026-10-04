@@ -30,6 +30,7 @@ import { saldoAnteriorDeLaHoja, ajusteDeNotas } from './saldoCliente.js';
 import { ErrorReparto, emitidosDe, mutarReparto, verificarEntregas, enriquecerEntregas, enriquecerHojas, aplicarImportesCierre, notasDeHoja, notasUnicas } from './repartoDatos.js';
 import { proximoNumeroHoja } from './numeroHojaRuta.js';
 import { comprobarEsquema } from './estadoAplicacion.js';
+import { LecturasCompartidas } from './lecturasCompartidas.js';
 
 /** Sólo la oficina. Devuelve true si ya contestó el 403. */
 function frenaSiNoPuede(req: Request & { user?: JwtPayload }, res: Response): boolean {
@@ -208,7 +209,7 @@ export async function arrastreDelDia(req: Request & { user?: JwtPayload }, res: 
     const piso = corte === 'todo' ? desde : desde < corte ? corte : desde;
     const anterior = fechaArgentina(new Date(inicio + 'T12:00:00Z').getTime() - 864e5);
     if (piso > anterior) { res.json({ ok: true, fecha, cantidad: 0, desde: piso, por_fecha: {} }); return; }
-    const ventas = await fetchVentas(piso, anterior);
+    const ventas = await lecturasArrastre.obtener(`${piso}|${anterior}`, () => fetchVentas(piso, anterior), { actualizar: req.query.refrescar === '1' });
     // 🔄 Cuenta REMITOS, igual que la pantalla: un remito de la semana pasada que no salió es
     // mercadería facturada esperando el camión, y ése es el aviso que importa.
     const previos = ventas.filter((v: any) =>
@@ -226,19 +227,23 @@ export async function arrastreDelDia(req: Request & { user?: JwtPayload }, res: 
      * Auditoría del 08/09/2026.
      */
     const yaEn = new Set<string>();
-    for (let i = 0; i < ids.length; i += 200) {
-      const tanda = ids.slice(i, i + 200);
-      // Los que ya están en una hoja no son arrastre: alguien se ocupó.
-      const { data: asignados, error: errAsignados } = await sb().from('hojas_ruta_pedidos')
-        .select('im_comprobante_id,hojas_ruta!inner(tenant_id)').eq('hojas_ruta.tenant_id', TENANT_ID).in('im_comprobante_id', tanda);
+    // ⏱️ Todas las tandas y las dos tablas a la vez: una atrás de la otra eran ~12 consultas de
+    // ~250 ms cada una (04/10/2026).
+    const tandas: string[][] = [];
+    for (let i = 0; i < ids.length; i += 200) tandas.push(ids.slice(i, i + 200));
+    await Promise.all(tandas.map(async tanda => {
+      const [{ data: asignados, error: errAsignados }, { data: retiros, error: errRetiros }] = await Promise.all([
+        // Los que ya están en una hoja no son arrastre: alguien se ocupó.
+        sb().from('hojas_ruta_pedidos')
+          .select('im_comprobante_id,hojas_ruta!inner(tenant_id)').eq('hojas_ruta.tenant_id', TENANT_ID).in('im_comprobante_id', tanda),
+        // Ni los que el cliente pasa a buscar: ésos tampoco esperan un camión.
+        sb().from('retiros_sucursal').select('im_comprobante_id').eq('tenant_id', TENANT_ID).in('im_comprobante_id', tanda),
+      ]);
       if (errAsignados) throw new Error(errAsignados.message);
-      for (const a of asignados ?? []) yaEn.add(String((a as any).im_comprobante_id));
-      // Ni los que el cliente pasa a buscar: ésos tampoco esperan un camión.
-      const { data: retiros, error: errRetiros } = await sb().from('retiros_sucursal')
-        .select('im_comprobante_id').eq('tenant_id', TENANT_ID).in('im_comprobante_id', tanda);
       if (errRetiros) throw new Error(errRetiros.message);
+      for (const a of asignados ?? []) yaEn.add(String((a as any).im_comprobante_id));
       for (const r of retiros ?? []) yaEn.add(String((r as any).im_comprobante_id));
-    }
+    }));
     const sueltos = previos.filter((p: any) => !alias.get(String(p.id))!.some(id => yaEn.has(id)));
     const porFecha: Record<string, number> = {};
     for (const p of sueltos) porFecha[String(p.fecha).slice(0, 10)] = (porFecha[String(p.fecha).slice(0, 10)] ?? 0) + 1;
@@ -247,6 +252,14 @@ export async function arrastreDelDia(req: Request & { user?: JwtPayload }, res: 
     res.status(502).json({ error: err?.message ?? 'no se pudo consultar' });
   }
 }
+
+/**
+ * ⏱️ Los remitos de días anteriores que lee el arrastre, 10 minutos (04/10/2026). Eran 15 días de
+ * `/ventas` en cada apertura de Hojas de ruta —24-28 s y 12-14 llamadas a IM, fuera del cache de
+ * `/ventas`, que es de hasta 10 días— para un aviso. Lo que cambia seguido (si ya está en una
+ * hoja o en retiros) sale de la base cada vez.
+ */
+const lecturasArrastre = new LecturasCompartidas<any[]>(10 * 60_000, 8);
 
 /** GET /api/hojas-ruta?fecha= — las hojas del día, con su carga y el camión. */
 export async function listarHojas(req: Request & { user?: JwtPayload }, res: Response) {
