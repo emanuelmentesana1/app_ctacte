@@ -325,9 +325,9 @@ export function AjustesHojaModal({ hojaId, numero, pedidos, onClose, onCambio }:
                                     </b>
                                 </div>
                                 <div className="aj-fila-meta">
-                                    {n.im_comprobante_id ? nombrePedido(n.im_comprobante_id) : 'Corrección de factura'}
+                                    {n.im_comprobante_id ? nombrePedido(n.im_comprobante_id) : 'Desde corrección de factura'}
                                     {n.motivo ? ` · ${n.motivo}` : ''}
-                                    {n.origen !== 'panel' && ' · desde corrección de factura'}
+                                    {n.origen !== 'panel' && n.im_comprobante_id && ' · desde corrección de factura'}
                                 </div>
                             </div>
                             {n.ajuste_id ? (

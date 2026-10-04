@@ -211,7 +211,9 @@ try {
       await modal.locator('.aj-fila').first().waitFor();
       assert(!/Busca las notas de crédito/.test(await modal.innerText()), 'La ayuda sigue fija en la ventana');
       assert(/Busca las notas de crédito/.test(await modal.locator('.aj-ayuda').getAttribute('title') ?? ''), 'La ayuda no quedó en el ⓘ');
-      assert(/desde corrección de factura/i.test(await modal.locator('.aj-fila').first().innerText()), 'Se perdió de dónde vino la nota');
+      const origen = await modal.locator('.aj-fila').first().innerText();
+      assert(/desde corrección de factura/i.test(origen), 'Se perdió de dónde vino la nota');
+      assert(!/corrección de factura · desde corrección de factura/i.test(origen), `Repite de dónde vino la nota: "${origen}"`);
       await modal.locator('.aj-seccion').last().getByRole('button', { name: 'Buscar' }).click();
       await modal.locator('.aj-fila.candidata.mencionada').waitFor();
       assert(await modal.locator('.aj-tag').count() === 0, 'Siguen las etiquetas de colores');
