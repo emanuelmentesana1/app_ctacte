@@ -2,7 +2,7 @@ import { useOperacionReparto } from './RepartoContext';
 import { useDialogoReparto, estiloDialogo } from '../utils/useDialogoReparto';
 import { useLecturaVigente } from '../utils/useLecturaVigente';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { X, Loader2, Link2, Trash2, AlertTriangle, RefreshCw, FileMinus } from 'lucide-react';
+import { X, Loader2, Link2, Trash2, AlertTriangle, RefreshCw, FileMinus, Info } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import './AjustesHojaModal.css';
 
@@ -327,7 +327,7 @@ export function AjustesHojaModal({ hojaId, numero, pedidos, onClose, onCambio }:
                                 <div className="aj-fila-meta">
                                     {n.im_comprobante_id ? nombrePedido(n.im_comprobante_id) : 'Corrección de factura'}
                                     {n.motivo ? ` · ${n.motivo}` : ''}
-                                    {n.origen !== 'panel' && <span className="aj-tag"> desde corrección de factura</span>}
+                                    {n.origen !== 'panel' && ' · desde corrección de factura'}
                                 </div>
                             </div>
                             {n.ajuste_id ? (
@@ -377,12 +377,11 @@ export function AjustesHojaModal({ hojaId, numero, pedidos, onClose, onCambio }:
                             {buscando ? <Loader2 size={13} className="girando" /> : <RefreshCw size={13} />} Buscar
                         </button>
                     </h4>
-                    <p className="aj-ayuda">
-                        Busca las notas de crédito y débito de los clientes de esta hoja, desde su fecha en
-                        adelante. Las que dicen <b>SEGUN HR {numero}</b> en las observaciones aparecen primero.
-                        {/* 🪤 Sin prometer lo que no hace: no devuelve mercadería, no reingresa stock y no
-                            relaciona los comprobantes dentro de InfoManager. */}
-                        <br /><b>Vincular</b> registra la nota en esta hoja y ajusta su total.
+                    {/* 🔄 04/10/2026: en una línea lo que hace "Vincular"; cómo se busca, en el ⓘ.
+                        🪤 Sin prometer lo que no hace: no devuelve mercadería, no reingresa stock y no
+                        relaciona los comprobantes dentro de InfoManager. */}
+                    <p className="aj-ayuda" title={`Busca las notas de crédito y débito de los clientes de esta hoja, desde su fecha en adelante. Las que dicen SEGUN HR ${numero} en las observaciones aparecen primero.`}>
+                        <Info size={13} /> <span><b>Vincular</b> registra la nota en esta hoja y ajusta su total.</span>
                     </p>
 
                     {(candidatas ?? []).map(c => {
@@ -393,7 +392,8 @@ export function AjustesHojaModal({ hojaId, numero, pedidos, onClose, onCambio }:
                                     <div className="aj-fila-tit">
                                         {c.tipo} {c.numero ?? '—'}
                                         <b className={c.signo > 0 ? 'suma' : 'resta'}>{c.signo > 0 ? '+' : '−'} {money(c.importe)}</b>
-                                        {c.menciona_esta_hoja && <span className="aj-tag">nombra esta hoja</span>}
+                                        {/* 🔄 04/10/2026: la fila ya va resaltada; el porqué, en el ⓘ. */}
+                                        {c.menciona_esta_hoja && <span className="aj-info" title={`Dice SEGUN HR ${numero} en las observaciones: casi seguro es la que se busca.`}><Info size={13} /></span>}
                                     </div>
                                     <div className="aj-fila-meta">
                                         {c.fecha} · cliente {c.cod_cliente}

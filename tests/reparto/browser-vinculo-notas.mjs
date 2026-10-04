@@ -198,6 +198,26 @@ try {
       } finally { await ctx.close(); }
     });
   }
+
+  /**
+   * 🔄 Limpieza de avisos (04/10/2026): la ayuda fija y las etiquetas amarillas mareaban. La ayuda
+   * va a un ⓘ; la nota que nombra la hoja se sigue resaltando, y de dónde vino cada nota se lee.
+   */
+  await test('La ayuda va a un ⓘ, sin etiquetas de colores; se sigue leyendo de dónde vino cada nota', async () => {
+    const { page, ctx } = await pantalla();
+    try {
+      await abrirModal(page);
+      const modal = page.locator('.aj-modal');
+      await modal.locator('.aj-fila').first().waitFor();
+      assert(!/Busca las notas de crédito/.test(await modal.innerText()), 'La ayuda sigue fija en la ventana');
+      assert(/Busca las notas de crédito/.test(await modal.locator('.aj-ayuda').getAttribute('title') ?? ''), 'La ayuda no quedó en el ⓘ');
+      assert(/desde corrección de factura/i.test(await modal.locator('.aj-fila').first().innerText()), 'Se perdió de dónde vino la nota');
+      await modal.locator('.aj-seccion').last().getByRole('button', { name: 'Buscar' }).click();
+      await modal.locator('.aj-fila.candidata.mencionada').waitFor();
+      assert(await modal.locator('.aj-tag').count() === 0, 'Siguen las etiquetas de colores');
+      assert(/SEGUN HR 3405/.test(await modal.locator('.aj-fila.candidata .aj-info').getAttribute('title') ?? ''), 'No explica por qué la nota está resaltada');
+    } finally { await ctx.close(); }
+  });
 } finally {
   await browser.close();
   await fs.writeFile(out + '/browser-vinculo-notas.json', JSON.stringify(results, null, 2));

@@ -225,6 +225,128 @@ try {
       assert(!/Dejá la factura como tiene que quedar/.test(await page.locator('.cf-modal').innerText()), 'El recuadro de ayuda sigue fijo');
     } finally { await ctx.close(); }
   });
+
+  // ─── Hojas de ruta ─────────────────────────────────────────────────────────
+  /** Un remito listo para salir, como lo arma /api/hojas-ruta/pendientes. */
+  const remito = (id, nombre, extra = {}) => ({ ...row(id, nombre), im_numero: 5000 + Number(id), factura_origen: 'unica',
+    im_factura_numero: 4000 + Number(id), im_factura_tipo: 'FA B', renglones_sin_peso: 0, de_otro_dia: false,
+    observaciones: null, hoja_id: null, ...extra });
+  const enHoja = (id, extra = {}) => ({ im_comprobante_id: id, im_numero: 5000 + Number(id), cliente_nombre: 'CLIENTE ' + id,
+    cod_cliente: Number(id), total: 150000, saldo_anterior: 0, bultos: 10, kg: 300, tipo_comprobante: 'RE', peso_completo: true,
+    im_factura_numero: 4000 + Number(id), im_remito_numero: 5000 + Number(id), facturado_at: '2026-09-10', ...extra });
+  const HOJA = pedidos => ({ version: 1, id: 'h1', numero: 3405, nombre: null, fecha: '2026-09-10', turno: null, transporte: null,
+    camion: null, camion_id: null, capacidad_kg: null, cod_zona: 9, estado: 'abierta', facturada: true, chofer: null,
+    chofer_id: null, cerrada_at: null, pedidos, totales: { pedidos: pedidos.length, bultos: 10 * pedidos.length, kg: 300 * pedidos.length },
+    carga: { completa: true, porcentaje: null, excedido: false, sobra_kg: null } });
+  const aHojas = async (page, pendientes, hojas = []) => {
+    await page.route('**/api/hojas-ruta/pendientes**', r => reply(r, { pendientes, dias_sin_items: [] }));
+    await page.route('**/api/hojas-ruta?**', r => reply(r, { hojas }));
+    await page.locator('.of-tabs').getByRole('button', { name: 'Hojas de ruta', exact: true }).click();
+    await page.locator('.hr-zona-head').first().waitFor();
+  };
+
+  await test('🔴 Hojas: queda "sin factura"; se van el "⚠" por zona, "zona estimada" y "sin peso"; la deducida va a un ⓘ', async () => {
+    const { page, ctx } = await setup(1440);
+    try {
+      await aHojas(page, [
+        remito('201', 'CLIENTE SIN FACTURA', { im_factura_numero: null, factura_origen: 'ninguna' }),
+        remito('202', 'CLIENTE DEDUCIDA', { factura_origen: 'elegida' }),
+        remito('203', 'CLIENTE ESTIMADA', { zona_origen: 'nombre' }),
+        remito('204', 'CLIENTE SIN PESO', { renglones_sin_peso: 2, peso_completo: false }),
+      ]);
+      // "Sin factura" es EL aviso de la pantalla: se queda.
+      assert(/1 sin factura/.test(await page.locator('.hr-resumen .hr-chip-aviso.grave').innerText()), 'Se perdió el aviso de "sin factura"');
+      // El "⚠" por zona repetía ese número, y su ayuda decía "por debajo de lista".
+      assert(await page.locator('.hr-zona-alerta').count() === 0, 'Sigue el "⚠" por zona');
+      const deducida = page.locator('.hr-resumen .hr-info', { hasText: '1 con factura deducida' });
+      assert(await deducida.count() === 1, 'La factura deducida no quedó en un ⓘ');
+      assert(/más de una factura/.test(await deducida.getAttribute('title') ?? ''), 'El ⓘ no explica qué es una factura deducida');
+      await page.locator('.hr-zona-abrir').first().click();
+      await page.locator('.hr-ped').nth(3).waitFor();
+      const lista = await page.locator('.hr-col-pedidos').innerText();
+      for (const viejo of ['zona estimada', 'sin peso']) assert(!lista.includes(viejo), `La lista todavía dice "${viejo}"`);
+      // Lo de cada fila que sí importa sigue: la falta de factura y la factura dudosa.
+      assert(/sin factura/.test(await page.locator('.hr-ped', { hasText: 'CLIENTE SIN FACTURA' }).innerText()), 'La fila perdió "sin factura"');
+      assert(/4202 \?/.test(await page.locator('.hr-ped', { hasText: 'CLIENTE DEDUCIDA' }).innerText()), 'La fila perdió la factura dudosa');
+    } finally { await ctx.close(); }
+  });
+
+  await test('Hojas: los clientes sin zona van a un informe para quien carga clientes en IM', async () => {
+    const { page, ctx } = await setup(1440);
+    try {
+      await aHojas(page, [
+        remito('201', 'CLIENTE CON ZONA'),
+        remito('203', 'CLIENTE ESTIMADA', { zona_origen: 'nombre', cod_zona: 4, zona: 'Concepción / Monteros' }),
+        remito('205', 'CLIENTE SIN ZONA', { zona_origen: 'ninguno', cod_zona: null, zona: 'Sin zona' }),
+        remito('206', 'CLIENTE SIN ZONA', { zona_origen: 'ninguno', cod_zona: null, zona: 'Sin zona', cod_cliente: 205 }),
+      ]);
+      await page.locator('.hr-resumen').getByRole('button', { name: /Informes/ }).click();
+      const dialogo = page.getByRole('dialog', { name: 'Informes del rango' });
+      await dialogo.waitFor();
+      const texto = await dialogo.innerText();
+      assert(/CLIENTE ESTIMADA/.test(texto) && /CLIENTE SIN ZONA/.test(texto), `El informe no trae a los clientes sin zona: "${texto}"`);
+      assert(!/CLIENTE CON ZONA/.test(texto), 'El informe trae a un cliente que tiene la zona cargada');
+      assert(/No se manda a nadie/.test(texto), 'No aclara que el informe no se manda');
+      const fila = dialogo.locator('tbody tr', { hasText: 'CLIENTE SIN ZONA' });
+      assert(await fila.count() === 1, 'Repite al cliente por cada pedido');
+      assert((await fila.locator('td').last().innerText()).trim() === '2', 'No cuenta los pedidos del cliente');
+      await page.keyboard.press('Escape');
+      await dialogo.waitFor({ state: 'detached' });
+    } finally { await ctx.close(); }
+  });
+
+  await test('🔴 Hojas: "enlace copiado" y el retiro sin vueltas se van solos; el "pero…" del retiro se queda', async () => {
+    let sinFacturar = 0;
+    const { page, ctx } = await setup(1440, { beforeGoto: async p => {
+      // En un navegador sin pantalla el portapapeles no anda: se simula que copió.
+      await p.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => {} } }));
+      await p.route('**/api/retiros', r => r.request().method() === 'POST'
+        ? reply(r, { ok: true, agregados: 1, sin_facturar: sinFacturar }) : r.fallback());
+    } });
+    try {
+      page.on('dialog', d => d.accept());
+      await aHojas(page, [remito('201', 'CLIENTE ALFA'), remito('202', 'CLIENTE BETA')], [HOJA([enHoja('301')])]);
+      await page.getByRole('button', { name: 'Copiar enlace a hoja 3405' }).click();
+      const listo = page.locator('.aviso-temporal');
+      await listo.waitFor();
+      assert(/Enlace a hoja 3405 copiado/.test(await listo.innerText()), 'No avisa que se copió el enlace');
+      assert(await page.locator('.hr-aviso', { hasText: 'copiado' }).count() === 0, 'El "copiado" sigue como cartel fijo');
+      await listo.waitFor({ state: 'detached', timeout: 8000 });
+
+      const retirar = async () => {
+        await page.locator('.hr-ped input[type=checkbox]').first().check();
+        await page.getByRole('button', { name: /Retira el cliente/ }).click();
+      };
+      await page.locator('.hr-zona-abrir').first().click();
+      await retirar();
+      await page.locator('.aviso-temporal', { hasText: 'retiro en sucursal' }).waitFor();
+      assert(await page.locator('.hr-aviso', { hasText: 'retiro en sucursal' }).count() === 0, 'El retiro sin vueltas sigue como cartel fijo');
+
+      sinFacturar = 1;
+      await retirar();
+      const pero = page.locator('.hr-aviso', { hasText: 'todavía sin facturar' });
+      await pero.waitFor();
+      await page.waitForTimeout(6000);
+      assert(await pero.isVisible(), 'El "pero…" del retiro se fue solo: nadie lo llegó a leer');
+    } finally { await ctx.close(); }
+  });
+
+  await test('Hoja: "sin saldo" pasa a un ⓘ; "Importe por verificar" se queda', async () => {
+    const { page, ctx } = await setup(1440);
+    try {
+      await aHojas(page, [remito('201', 'CLIENTE ALFA')], [HOJA([
+        enHoja('301', { saldo_anterior: null }),
+        enHoja('302', { importe_error: 'No pude verificar el importe de la factura 4302.' }),
+      ])]);
+      // Con un importe por verificar la hoja arranca desplegada: es la que hay que mirar.
+      const filas = page.locator('.hr-hoja-ped');
+      await filas.nth(1).waitFor();
+      const saldo = filas.nth(0).locator('.hr-sin-saldo');
+      assert(await saldo.count() === 1 && /no se pudo traer el saldo/i.test(await saldo.getAttribute('title') ?? ''), '"sin saldo" no quedó en un ⓘ');
+      assert(await filas.nth(0).locator('.hr-sinpeso').count() === 0, '"sin saldo" sigue pintado como aviso');
+      assert(/Importe por verificar/.test(await filas.nth(1).innerText()), 'Se perdió "Importe por verificar"');
+    } finally { await ctx.close(); }
+  });
 } finally {
   await browser.close();
   await fs.writeFile(out + '/browser-limpieza-avisos.json', JSON.stringify(results, null, 2));

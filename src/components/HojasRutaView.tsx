@@ -5,13 +5,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     AlertTriangle, Truck, Plus, Loader2, X, Wand2, MapPin, Package,
     ChevronRight, RefreshCw, Trash2, Printer, CheckCircle2, Store, Lock, Unlock, FileMinus,
-    MessageSquare, Search, ChevronDown, History,
+    MessageSquare, Search, ChevronDown, History, Info,
 } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import { coincide } from '../utils/buscar';
 import { useRecargarAlVolver } from '../utils/recargarAlVolver';
 import { ImprimirHoja } from './ImprimirHoja';
 import { AjustesHojaModal } from './AjustesHojaModal';
+import { AvisoTemporal } from './AvisoTemporal';
+import { InformesOficina, type SeccionInforme } from './InformesOficina';
 import './HojasRutaView.css';
 
 /**
@@ -177,6 +179,9 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
     const [sel, setSel] = useState<Set<string>>(new Set());
     const [trabajando, setTrabajando] = useState(false);
     const [aviso, setAviso] = useState<string | null>(null);
+    /** 🔄 04/10/2026: lo que salió bien ("enlace copiado", "quedaron como retiro") se va solo a los 5 s. */
+    const [info, setInfo] = useState<string | null>(null);
+    const [verInformes, setVerInformes] = useState(false);
     /** Cuántos pedidos vigentes quedaron de días anteriores. null = todavía no se sabe. */
     const [arrastre, setArrastre] = useState<number | null>(null);
     /** Días cuyos renglones no se pudieron traer: los kilos de esos remitos van en 0. */
@@ -413,6 +418,25 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
      */
     const sinFactura = pendientes.filter(p => p.im_factura_numero == null).length;
     const facturaDeducida = pendientes.filter(p => p.factura_origen === 'elegida').length;
+    /**
+     * 🔄 04/10/2026: los clientes sin zona en InfoManager van a un informe para quien los carga allá.
+     * Antes era el badge "zona estimada" en cada fila, y a Jo no le toca arreglarlo.
+     */
+    const informes = useMemo<SeccionInforme[]>(() => {
+        const clientes = new Map<number, { nombre: string; zona: string; pedidos: number }>();
+        for (const p of pendientes) {
+            if (p.zona_origen === 'im') continue;
+            const c = clientes.get(p.cod_cliente) ?? { nombre: p.cliente_nombre, zona: p.zona_origen === 'nombre' ? `${p.zona} (por el nombre)` : 'Sin zona', pedidos: 0 };
+            c.pedidos += 1;
+            clientes.set(p.cod_cliente, c);
+        }
+        return [{
+            clave: 'clientes-sin-zona', titulo: 'Clientes sin zona', para: 'quien carga clientes en InfoManager: no tienen la zona cargada',
+            columnas: ['Código', 'Cliente', 'Zona que usa la app', 'Pedidos'],
+            filas: [...clientes.entries()].sort((a, b) => a[1].nombre.localeCompare(b[1].nombre)).map(([cod, c]) => [cod, c.nombre, c.zona, c.pedidos]),
+            vacio: 'Todos los clientes de estos pedidos tienen la zona cargada en InfoManager.',
+        }];
+    }, [pendientes]);
 
     /**
      * 🔴 UNA FILA SIN IMPORTE ACREDITADO NO SE PUEDE ELEGIR.
@@ -626,9 +650,11 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
             // 🔑 Sin este aviso la acción no daba NINGUNA señal de haber hecho algo: los pedidos
             // salen de la lista recién cuando vuelve la consulta a IM, que tarda segundos.
             const sinFacturar = Number(d?.sin_facturar ?? 0);
-            setAviso(`${d?.agregados ?? seleccionados.length} pedido(s) quedaron como retiro en sucursal.`
+            const texto = `${d?.agregados ?? seleccionados.length} pedido(s) quedaron como retiro en sucursal.`
                 + (sinFacturar ? ` ${sinFacturar} todavía sin facturar: el cliente no se los puede llevar sin remito.` : '')
-                + ' Se ven en Retiros en sucursal.');
+                + ' Se ven en Retiros en sucursal.';
+            // 🔄 04/10/2026: si salió todo bien se va solo; con pedidos sin facturar es un "pero…" y se queda.
+            if (sinFacturar) setAviso(texto); else setInfo(texto);
             setSel(new Set());
             // Salen de pendientes: la lista se rehace contra IM, sin bloquear la pantalla.
             void cargar(true);
@@ -681,11 +707,15 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                             <AlertTriangle size={13} /> {sinFactura} sin factura
                         </span>
                     )}
+                    {/* 🔄 04/10/2026: a un ⓘ. No frena nada, y cada fila ya la marca con "FA … ?". */}
                     {facturaDeducida > 0 && (
-                        <span className="hr-chip-aviso nota" title="El cliente tenía más de una factura por el mismo importe ese día: se tomó la más cercana en el tiempo. Verificá si el número importa.">
-                            {facturaDeducida} con factura deducida
+                        <span className="hr-info" title="El cliente tenía más de una factura por el mismo importe ese día: se tomó la más cercana en el tiempo. Verificá si el número importa.">
+                            <Info size={13} /> {facturaDeducida} con factura deducida
                         </span>
                     )}
+                    <button className="hr-informes" onClick={() => setVerInformes(true)}>
+                        <Info size={13} /> Informes
+                    </button>
                 </div>
             </div>
 
@@ -742,7 +772,6 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                         const abierta = zonasAbiertas.has(k) || !!busqueda.trim();
                         const elegibles = g.filas.filter(elegible);
                         const elegidos = elegibles.filter(f => sel.has(f.im_comprobante_id)).length;
-                        const conAviso = g.filas.filter(f => f.im_factura_numero == null).length;
                         const sinVerificar = g.filas.length - elegibles.length;
                         return (
                         <div className={`hr-zona${abierta ? ' abierta' : ''}`} key={k}>
@@ -760,7 +789,6 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                                     <span className={`hr-zona-nombre${g.cod_zona == null ? ' sin' : ''}`}>{g.zona}</span>
                                     <span className="hr-zona-meta">
                                         {g.filas.length} ped · {kilos(g.kg)}
-                                        {conAviso > 0 && <span className="hr-zona-alerta" title="Pedidos por debajo de la lista que corresponde"> · {conAviso} ⚠</span>}
                                         {sinVerificar > 0 && <span className="hr-zona-pendiente" title="No se pudo verificar su importe en InfoManager: no se pueden elegir"> · {sinVerificar} sin verificar</span>}
                                         {elegidos > 0 && <span className="hr-zona-elegidos"> · {elegidos} elegidos</span>}
                                     </span>
@@ -795,17 +823,13 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                                                     <AlertTriangle size={11} /> sin factura
                                                 </span>
                                             )}
-                                            {p.zona_origen === 'nombre' && <span className="hr-badge tenue" title="La zona se dedujo del nombre del cliente, no está cargada en InfoManager">zona estimada</span>}
+                                            {/* 🔄 04/10/2026: sin "zona estimada": esos clientes van al informe "Clientes sin zona". */}
                                         </div>
                                         <div className="hr-ped-meta">
                                             RE {p.im_numero ?? '—'} · {p.importe_error
                                                 ? <b className="hr-sin-importe">importe sin verificar</b>
                                                 : money(Number(p.total))} · {p.bultos} bultos
-                                            {(!p.peso_completo || p.renglones_sin_peso > 0) && (
-                                                <span className="hr-sinpeso" title="Estos renglones no tienen peso cargado en el catálogo: los kilos de este pedido son un mínimo, puede pesar más">
-                                                    · {p.renglones_sin_peso} sin peso
-                                                </span>
-                                            )}
+                                            {/* 🔄 04/10/2026: sin "N sin peso": lo que falta pesar lo dice la hoja ("Peso estimado"). */}
                                         </div>
                                         {/* 🔑 Por qué no se puede elegir. Se lee, no se adivina de un tooltip. */}
                                         {p.importe_error && <div className="hr-sinpeso" role="status">{p.importe_error}</div>}
@@ -923,7 +947,7 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                                 )}
                                 <button className="hr-btn ghost chico" aria-label={`Copiar enlace a hoja ${h.numero}`} onClick={async () => {
                                     const u = new URL(location.href); u.searchParams.set('etapa', 'hojas'); u.searchParams.set('hoja', h.id); u.searchParams.set('desde', h.fecha); u.searchParams.set('hasta', h.fecha);
-                                    try { await navigator.clipboard.writeText(u.toString()); setAviso(`Enlace a hoja ${h.numero} copiado.`); } catch { setAviso(`Enlace: ${u.toString()}`); }
+                                    try { await navigator.clipboard.writeText(u.toString()); setInfo(`Enlace a hoja ${h.numero} copiado.`); } catch { setAviso(`Enlace: ${u.toString()}`); }
                                 }}>Enlace</button>
                                 {plegada && (
                                     <span className="hr-plegada-resumen">
@@ -1048,7 +1072,7 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                                             {p.tipo_comprobante ?? 'Comprobante'} {p.im_numero ?? '—'} · {kilos(Number(p.kg ?? 0))}
                                             {p.saldo_anterior != null
                                                 ? <> · saldo <b>{money(Number(p.saldo_anterior))}</b></>
-                                                : <span className="hr-sinpeso" title="No se pudo traer el saldo: va en blanco en la hoja impresa"> · sin saldo</span>}
+                                                : <span className="hr-sin-saldo" title="No se pudo traer el saldo: va en blanco en la hoja impresa"> · sin saldo <Info size={11} /></span>}
                                         </div>
                                         {p.importe_error && <div className="hr-sinpeso" role="status">Importe por verificar: {p.importe_error}</div>}
                                     </div>
@@ -1093,6 +1117,8 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
             </div>
 
             {imprimiendo && <ImprimirHoja hojaId={imprimiendo} onClose={() => setImprimiendo(null)} />}
+            <AvisoTemporal texto={info} onCerrar={() => setInfo(null)} />
+            {verInformes && <InformesOficina titulo="Informes del rango" secciones={informes} onCerrar={() => setVerInformes(false)} />}
 
             {/* Lo que volvió del reparto: las notas NC/ND y el número final de la hoja. */}
             {ajustando && (() => {

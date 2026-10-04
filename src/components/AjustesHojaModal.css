@@ -52,7 +52,8 @@
     margin: 0; font-size: 0.85rem; color: var(--color-text-muted);
     text-transform: uppercase; letter-spacing: 0.03em;
 }
-.aj-ayuda { margin: 0; font-size: 0.8rem; color: var(--color-text-muted); }
+.aj-ayuda { margin: 0; font-size: 0.8rem; color: var(--color-text-muted); display: flex; align-items: center; gap: 0.3rem; cursor: help; }
+.aj-ayuda > svg { flex-shrink: 0; }
 .aj-ayuda b { color: var(--color-text); }
 .aj-vacio { margin: 0; font-size: 0.84rem; color: var(--color-text-muted); }
 
@@ -69,10 +70,7 @@
 .aj-fila-meta.warn { color: #b03a26; }
 /* La que ya dice "SEGUN HR N": es casi con seguridad la que se busca. */
 .aj-fila.mencionada { border-color: var(--color-accent); background: #fdf6e6; }
-.aj-tag {
-    background: var(--color-accent); color: #4a3600;
-    padding: 0.05rem 0.4rem; border-radius: 999px; font-size: 0.68rem; font-weight: 700;
-}
+.aj-info { display: inline-flex; color: var(--color-text-muted); cursor: help; }
 .aj-fila select {
     margin-top: 0.15rem; max-width: 100%;
     border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text);

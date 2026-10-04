@@ -76,7 +76,6 @@
 }
 .hr-chevron { flex: none; transition: transform 0.15s; color: var(--color-text-muted); }
 .hr-zona.abierta .hr-chevron { transform: rotate(90deg); }
-.hr-zona-alerta { color: #a33b26; font-weight: 700; }
 .hr-zona-elegidos { color: var(--color-primary); font-weight: 700; }
 .hr-zona-nombre { font-weight: 700; font-size: 0.86rem; color: var(--color-primary); }
 /* Los sin zona van marcados: son los que hay que mirar antes de armar la hoja. */
@@ -256,8 +255,19 @@ button.hr-badge { cursor: pointer; font-family: inherit; }
    botones van juntos a la izquierda. */
 .hr-hoja-pie .hr-btn.chico { margin-left: 0; flex: 1; }
 
-/* Comentario, no alerta: ver PresupuestosView.css. */
-.hr-chip-aviso.nota { background: var(--color-bg); color: var(--color-text-muted); border-color: var(--color-border); }
+/* 🔄 04/10/2026 (limpieza de avisos): lo que no frena nada va a un ⓘ, con el detalle en el title. */
+.hr-info {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    border: 1px solid var(--color-border); border-radius: 999px; padding: 0.15rem 0.6rem;
+    font-size: 0.78rem; color: var(--color-text-muted); cursor: help;
+}
+.hr-informes {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    border: 1px solid var(--color-border); background: transparent; color: var(--color-text-muted);
+    border-radius: 999px; padding: 0.15rem 0.6rem; font-size: 0.78rem; font-family: inherit; cursor: pointer;
+}
+.hr-informes:hover { color: var(--color-text); }
+.hr-sin-saldo { display: inline-flex; align-items: center; gap: 0.2rem; cursor: help; }
 
 /* La observación que escribió el vendedor en el presupuesto (viene de InfoManager). Acá se
    decide en qué camión va: "entregar el jueves temprano" cambia la hoja, no es decoración. */
