@@ -1,8 +1,9 @@
 import { Activity, useState } from 'react';
-import { Truck, Store, UserCheck } from 'lucide-react';
+import { Truck, Store, UserCheck, Banknote } from 'lucide-react';
 import { HojasRutaView } from './HojasRutaView';
 import { RetirosView } from './RetirosView';
 import { LiquidacionView } from './LiquidacionView';
+import { RendicionesView } from './RendicionesView';
 import { useReparto } from './RepartoContext';
 import './EntregasView.css';
 
@@ -10,6 +11,7 @@ import './EntregasView.css';
  * La etapa 3 del circuito: cómo sale la mercadería y qué se le paga a quien la lleva.
  *
  *   · HOJAS DE RUTA — el armado del día.
+ *   · RENDICIONES   — lo cobrado contra lo entregado y el cuadre con IM (sólo lectura, 04/10/2026).
  *   · RETIROS       — los que el cliente pasa a buscar, acumulados por mes.
  *   · LIQUIDACIÓN   — lo que entregó cada chofer en el mes.
  *
@@ -21,7 +23,7 @@ import './EntregasView.css';
  * qué correr mientras se mira la liquidación del mes pasado.
  */
 
-type Seccion = 'hojas' | 'retiros' | 'liquidacion';
+type Seccion = 'hojas' | 'rendiciones' | 'retiros' | 'liquidacion';
 
 export function EntregasView({ desde, hasta }: { desde: string; hasta: string }) {
     const { ocupado, puedeNavegar } = useReparto();
@@ -35,6 +37,9 @@ export function EntregasView({ desde, hasta }: { desde: string; hasta: string })
                 <button aria-label="Hojas de ruta" className={seccion === 'hojas' ? 'on' : ''} disabled={ocupado} onClick={() => visitar('hojas')}>
                     <Truck size={14} /> <span>Hojas de ruta</span>
                 </button>
+                <button aria-label="Rendiciones" className={seccion === 'rendiciones' ? 'on' : ''} disabled={ocupado} onClick={() => visitar('rendiciones')}>
+                    <Banknote size={14} /> <span>Rendiciones</span>
+                </button>
                 <button aria-label="Retiros en sucursal" className={seccion === 'retiros' ? 'on' : ''} disabled={ocupado} onClick={() => visitar('retiros')}>
                     <Store size={14} /> <span>Retiros en sucursal</span>
                 </button>
@@ -44,6 +49,7 @@ export function EntregasView({ desde, hasta }: { desde: string; hasta: string })
             </nav>
 
             {visitadas.has('hojas') && <Activity mode={seccion === 'hojas' ? 'visible' : 'hidden'}><HojasRutaView desde={desde} hasta={hasta} /></Activity>}
+            {visitadas.has('rendiciones') && <Activity mode={seccion === 'rendiciones' ? 'visible' : 'hidden'}><RendicionesView desde={desde} hasta={hasta} /></Activity>}
             {visitadas.has('retiros') && <Activity mode={seccion === 'retiros' ? 'visible' : 'hidden'}><RetirosView /></Activity>}
             {visitadas.has('liquidacion') && <Activity mode={seccion === 'liquidacion' ? 'visible' : 'hidden'}><LiquidacionView /></Activity>}
         </div>
