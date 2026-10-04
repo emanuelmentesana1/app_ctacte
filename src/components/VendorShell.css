@@ -401,6 +401,8 @@
 .vs-bucket-pill.bucket-vencido .dot-b { background: #A83E2B }
 .vs-bucket-pill .dot-b { width: 6px; height: 6px; border-radius: 50% }
 .vs-client-docs { font-size: 11px; color: #6e7670; font-weight: 500 }
+/* Pago cargado que todavía no se imputó: el saldo de la tarjeta todavía no lo descuenta (S32). */
+.vs-pago-revision { font-size: 11px; font-weight: 600; color: #5c4510; background: #FFF6E0; border: 1px solid #EEC045; border-radius: 999px; padding: 2px 8px; white-space: nowrap }
 
 .vs-quick-actions {
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;

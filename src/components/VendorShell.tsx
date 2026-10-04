@@ -282,6 +282,30 @@ export const VendorShell = ({ onLogout }: Props) => {
         }).catch(() => { /* telemetría: nunca molesta */ });
     }, [tab]);
     const [showRecibos, setShowRecibos] = useState(false);
+    /** Cliente desde cuya tarjeta se tocó "Pago": la carga abre con él elegido (S32). */
+    const [reciboCliente, setReciboCliente] = useState<string | null>(null);
+    /**
+     * Pagos cargados que todavía no se imputaron, por cliente. La tarjeta lo dice para que el
+     * vendedor no vuelva a subir el mismo pago al ver que el saldo todavía no lo descuenta (S32:
+     * en septiembre hubo 8 rechazos por "subido dos veces").
+     */
+    const [pagosEnRevision, setPagosEnRevision] = useState<Map<string, { n: number; total: number }>>(() => new Map());
+    const cargarPagosEnRevision = async () => {
+        try {
+            const res = await fetch('/api/recibos?status=pendiente_revision', { headers: authHeaders() });
+            const d = await res.json();
+            if (!res.ok || !d?.ok) return;
+            const m = new Map<string, { n: number; total: number }>();
+            for (const r of d.recibos ?? []) {
+                const k = String(r.cod_cliente);
+                const v = m.get(k) ?? { n: 0, total: 0 };
+                v.n += 1; v.total += Number(r.monto) || 0;
+                m.set(k, v);
+            }
+            setPagosEnRevision(m);
+        } catch { /* es información de ayuda: si falla, la tarjeta se ve como siempre */ }
+    };
+    useEffect(() => { if (tab === 'cobranzas' && !soloSaldos) cargarPagosEnRevision(); }, [tab, soloSaldos]);
     const [showPedidos, setShowPedidos] = useState(false);
     /**
      * Cuántos productos tiene el pedido que quedó a medio cargar, para mostrarlo en el botón.
@@ -771,7 +795,8 @@ export const VendorShell = ({ onLogout }: Props) => {
                         bucket={bucket} setBucket={setBucket}
                         buckets={buckets}
                         totalClientes={clientsAgg.length}
-                        onUploadPago={() => setShowRecibos(true)}
+                        onUploadPago={(cod) => { setReciboCliente(cod ?? null); setShowRecibos(true); }}
+                        pagosEnRevision={pagosEnRevision}
                         soloConsulta={soloSaldos}
                         lastRefresh={lastRefresh}
                         loading={loading && invoices.length === 0}
@@ -842,13 +867,13 @@ export const VendorShell = ({ onLogout }: Props) => {
                 {pedidoEnPausa > 0 && <span className="vs-fab-badge">{pedidoEnPausa}</span>}
             </button>
             {/* FAB global: cargar pago */}
-            <button className="vs-fab" onClick={() => setShowRecibos(true)} title="Cargar pago">
+            <button className="vs-fab" onClick={() => { setReciboCliente(null); setShowRecibos(true); }} title="Cargar pago">
                 <Receipt size={22} />
             </button>
             </>}
 
             {showRecibos && (
-                <RecibosApp onClose={() => setShowRecibos(false)} clients={clientsAgg.map(c => ({ cod: c.cod, name: c.name, localidad: c.localidad }))} />
+                <RecibosApp onClose={() => { setShowRecibos(false); setReciboCliente(null); if (tab === 'cobranzas') cargarPagosEnRevision(); }} clienteInicial={reciboCliente} clients={clientsAgg.map(c => ({ cod: c.cod, name: c.name, localidad: c.localidad }))} />
             )}
             {showPedidos && (
                 <PedidosApp
@@ -1163,13 +1188,14 @@ function WidgetTopDeudores({ clients, onOpenClient, onGoToCobranzas }: { clients
 // ═══════════════════════════════════════════════════════════════════════════
 // COBRANZAS VIEW
 // ═══════════════════════════════════════════════════════════════════════════
-function CobranzasView({ clients, clientesConCredito, search, setSearch, bucket, setBucket, buckets, totalClientes, onUploadPago, soloConsulta, lastRefresh, loading, pendingOpenClient, onPendingOpenConsumed, viewPeriod, onPeriodoChange, codsCartera, veCartera, fechaLista, avisoFecha, cargandoFecha }:
+function CobranzasView({ clients, clientesConCredito, search, setSearch, bucket, setBucket, buckets, totalClientes, onUploadPago, pagosEnRevision, soloConsulta, lastRefresh, loading, pendingOpenClient, onPendingOpenConsumed, viewPeriod, onPeriodoChange, codsCartera, veCartera, fechaLista, avisoFecha, cargandoFecha }:
     {
         clients: ClientAgg[]; clientesConCredito: ClientAgg[]; search: string; setSearch: (s: string) => void;
         bucket: 'todos' | 'reciente' | 'medio' | 'vencido'; setBucket: (b: any) => void;
         buckets: { reciente: number; medio: number; vencido: number };
         totalClientes: number;
-        onUploadPago: () => void;
+        onUploadPago: (cod?: string) => void;
+        pagosEnRevision?: Map<string, { n: number; total: number }>;
         /** Saldos de clientes: la ficha sin Nota ni Pago. */
         soloConsulta?: boolean;
         lastRefresh: Date | null;
@@ -1280,6 +1306,7 @@ function CobranzasView({ clients, clientesConCredito, search, setSearch, bucket,
                         isOpen={openClient === c.cod}
                         onToggle={() => setOpenClient(p => p === c.cod ? null : c.cod)}
                         onUploadPago={onUploadPago}
+                        enRevision={pagosEnRevision?.get(c.cod)}
                         soloConsulta={soloConsulta} />
                 ))}
             </div>
@@ -1309,7 +1336,7 @@ function CobranzasView({ clients, clientesConCredito, search, setSearch, bucket,
     );
 }
 
-function ClientCard({ client, isOpen, onToggle, onUploadPago, soloConsulta }: { client: ClientAgg; isOpen: boolean; onToggle: () => void; onUploadPago: () => void; soloConsulta?: boolean }) {
+function ClientCard({ client, isOpen, onToggle, onUploadPago, enRevision, soloConsulta }: { client: ClientAgg; isOpen: boolean; onToggle: () => void; onUploadPago: (cod: string) => void; enRevision?: { n: number; total: number }; soloConsulta?: boolean }) {
     const bucket = client.maxDias <= 7 ? 'reciente' : client.maxDias <= 15 ? 'medio' : 'vencido';
     const bucketLabel = `${client.maxDias}d`;
     const db = client.db ?? {};
@@ -1339,6 +1366,11 @@ function ClientCard({ client, isOpen, onToggle, onUploadPago, soloConsulta }: { 
                         <span className={`vs-bucket-pill bucket-${bucket}`}>
                             <span className="dot-b" />{bucketLabel}
                         </span>
+                        {enRevision && (
+                            <span className="vs-pago-revision" title="Pagos cargados que todavía no se imputaron: el saldo todavía no los descuenta">
+                                {enRevision.n > 1 ? `${enRevision.n} pagos` : 'Pago'} en revisión · {formatMoney(enRevision.total)}
+                            </span>
+                        )}
                         <span className="vs-client-docs">{client.invoices.length} comprob.</span>
                     </div>
                 </div>
@@ -1363,7 +1395,7 @@ function ClientCard({ client, isOpen, onToggle, onUploadPago, soloConsulta }: { 
                 <button className="vs-qa note" onClick={e => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('vs-open-activity', { detail: { cod_cliente: client.cod, name: client.name } })); }}>
                     <FileText size={18} /><span>Nota</span>
                 </button>
-                <button className="vs-qa pay" onClick={e => { e.stopPropagation(); onUploadPago(); }}>
+                <button className="vs-qa pay" onClick={e => { e.stopPropagation(); onUploadPago(client.cod); }}>
                     <Receipt size={18} /><span>Pago</span>
                 </button>
                 </>}

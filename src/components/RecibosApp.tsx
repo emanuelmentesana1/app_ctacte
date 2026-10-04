@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
 import { X, Camera, Upload, Check, AlertCircle, ChevronLeft, Loader2, Search, Clock, FileText, RefreshCw, ZoomIn, ZoomOut, Download, ExternalLink, LogOut, Share2 } from 'lucide-react';
 import { authHeaders, getUser } from '../utils/auth';
 import { buscarClientes } from '../utils/buscarClientes';
 import { formatCurrency, formatCurrency2 } from '../utils/formatters';
 import { MEDIOS_PAGO_UI, DEFAULT_MEDIO_UI, normalizeMedioUI, exigeFotoUI } from '../utils/mediosPago';
+import { preseleccionFIFO, siguienteEnCola } from '../utils/aprobacionRecibos';
 import './RecibosApp.css';
 
 interface Props {
@@ -14,6 +15,11 @@ interface Props {
     fullPage?: boolean;
     // onLogout: en modo fullPage el header muestra el botón de cerrar sesión.
     onLogout?: () => void;
+    /**
+     * Cliente desde el que se tocó "Pago" (tarjeta de Cobranzas): abre directo la carga con ese
+     * cliente elegido. Antes caía en la lista y había que buscarlo de nuevo (S32, 04/10/2026).
+     */
+    clienteInicial?: string | null;
 }
 
 interface MPCandidate {
@@ -71,7 +77,7 @@ interface FacturaCandidata {
     detalle?: string;
 }
 
-export const RecibosApp = ({ onClose, clients = [], fullPage = false, onLogout }: Props) => {
+export const RecibosApp = ({ onClose, clients = [], fullPage = false, onLogout, clienteInicial = null }: Props) => {
     const user = getUser();
     // Misma regla que `puedeRevisarRecibos` del servidor: administrativo imputa (Mati, 26/09).
     const isBackoffice = user?.rol === 'admin' || user?.rol === 'gerente' || user?.rol === 'administrativo';
@@ -84,8 +90,23 @@ export const RecibosApp = ({ onClose, clients = [], fullPage = false, onLogout }
     // sus comprobantes (aprobados/rechazados/imputados) sin tener que pasar antes
     // por upload. Si quieren cargar uno nuevo, el botón "Cargar nuevo" está en
     // el header derecho cuando view === 'list'.
-    const [view, setView] = useState<'list' | 'upload' | 'detail'>('list');
+    const [view, setView] = useState<'list' | 'upload' | 'detail'>(clienteInicial ? 'upload' : 'list');
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    /**
+     * La tanda que está revisando el backoffice: los pendientes de la lista, en su orden y con sus
+     * filtros. Al resolver uno se abre el siguiente, sin volver a la lista (S32: después de cada
+     * aprobación había 1,8 s de espera fija y la lista se recargaba entera).
+     */
+    const [cola, setCola] = useState<string[]>([]);
+    const [resueltos, setResueltos] = useState<Set<string>>(() => new Set());
+    const resolver = (id: string) => {
+        const hechos = new Set(resueltos).add(id);
+        setResueltos(hechos);
+        const sig = siguienteEnCola(cola, id, hechos);
+        if (sig) { setSelectedId(sig); return; }
+        setSelectedId(null); setView('list');
+    };
+    const quedan = cola.filter(x => x !== selectedId && !resueltos.has(x)).length;
 
     // Maestro completo: incluye clientes sin saldo (p.ej. adelantos de dinero).
     // El `clients` prop viene filtrado por saldo > 1000 desde VendorShell, así que
@@ -187,13 +208,14 @@ export const RecibosApp = ({ onClose, clients = [], fullPage = false, onLogout }
                             isBackoffice={!!isBackoffice}
                             viewAll={viewAll}
                             clientNameByCod={clientNameByCod}
-                            onOpenDetail={(id) => { setSelectedId(id); setView('detail'); }}
+                            onOpenDetail={(id, pendientes) => { setSelectedId(id); setCola(pendientes); setResueltos(new Set()); setView('detail'); }}
                             onUpload={() => setView('upload')}
                         />
                     )}
                     {view === 'upload' && (
                         <UploadRecibo
                             clients={mergedClients}
+                            clienteInicial={clienteInicial}
                             defaultCodVendedor={user?.cod_vendedor ?? null}
                             hideCodVendedor={isRepartidor}
                             onDone={() => setView('list')}
@@ -202,7 +224,10 @@ export const RecibosApp = ({ onClose, clients = [], fullPage = false, onLogout }
                     )}
                     {view === 'detail' && selectedId && (
                         <DetalleRecibo
+                            key={selectedId}
                             id={selectedId}
+                            onResuelto={isBackoffice ? resolver : undefined}
+                            quedan={quedan}
                             isBackoffice={!!isBackoffice}
                             clientNameByCod={clientNameByCod}
                             clients={mergedClients}
@@ -235,7 +260,7 @@ const VENDOR_NAMES: Record<number, string> = {
 };
 const vendorLabel = (cod: number): string => VENDOR_NAMES[cod] ?? `Vendedor #${cod}`;
 
-function RecibosList({ isBackoffice, viewAll, clientNameByCod, onOpenDetail, onUpload }: { isBackoffice: boolean; viewAll: boolean; clientNameByCod: Map<string, string>; onOpenDetail: (id: string) => void; onUpload: () => void }) {
+function RecibosList({ isBackoffice, viewAll, clientNameByCod, onOpenDetail, onUpload }: { isBackoffice: boolean; viewAll: boolean; clientNameByCod: Map<string, string>; onOpenDetail: (id: string, pendientes: string[]) => void; onUpload: () => void }) {
     const [items, setItems] = useState<ReciboRow[]>([]);
     /**
      * El recibo en PDF para mandarle al cliente por WhatsApp.
@@ -428,7 +453,7 @@ function RecibosList({ isBackoffice, viewAll, clientNameByCod, onOpenDetail, onU
 
             <ul className="rec-items">
                 {visibleItems.map(r => (
-                    <li key={r.id} className="rec-item" onClick={() => onOpenDetail(r.id)}>
+                    <li key={r.id} className="rec-item" onClick={() => onOpenDetail(r.id, visibleItems.filter(x => x.status === 'pendiente_revision').map(x => x.id))}>
                         <div className="rec-item-thumb">
                             {r.foto_signed_url && r.foto_url.toLowerCase().endsWith('.pdf') ? (
                                 <div className="rec-pdf-placeholder"><FileText size={22} /></div>
@@ -477,12 +502,12 @@ function RecibosList({ isBackoffice, viewAll, clientNameByCod, onOpenDetail, onU
 // ───────────────────────────────────────────────────────────────────────────
 // UPLOAD
 // ───────────────────────────────────────────────────────────────────────────
-function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, onDone, onCancel }:
-    { clients: Array<{ cod: string; name: string; localidad?: string }>; defaultCodVendedor: number | null; hideCodVendedor?: boolean; onDone: () => void; onCancel: () => void }) {
+function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, clienteInicial = null, onDone, onCancel }:
+    { clients: Array<{ cod: string; name: string; localidad?: string }>; defaultCodVendedor: number | null; hideCodVendedor?: boolean; clienteInicial?: string | null; onDone: () => void; onCancel: () => void }) {
     const fileRef = useRef<HTMLInputElement>(null);
     const [file, setFile] = useState<File | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-    const [codCliente, setCodCliente] = useState('');
+    const [codCliente, setCodCliente] = useState(clienteInicial ?? '');
     const [codVendedor, setCodVendedor] = useState(defaultCodVendedor?.toString() ?? '');
     const [monto, setMonto] = useState('');
     // Fecha del comprobante: vacía por default para forzar al vendedor a cargar
@@ -492,10 +517,35 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, on
     const [fecha, setFecha] = useState<string>('');
     const [medioPago, setMedioPago] = useState<string>(DEFAULT_MEDIO_UI);
     const [observaciones, setObservaciones] = useState('');
-    const [clientSearch, setClientSearch] = useState('');
+    // Si se llegó desde la tarjeta de un cliente, la lista ya viene filtrada a ese cliente.
+    const [clientSearch, setClientSearch] = useState(() =>
+        clienteInicial ? (clients.find(c => c.cod === clienteInicial)?.name ?? clienteInicial) : '');
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
     const [ocrResult, setOcrResult] = useState<any>(null);
+    /**
+     * ¿Este pago ya figura? Se pregunta solo, apenas hay cliente, monto y fecha. Si aparece algo
+     * parecido hay que confirmar que es otro pago antes de enviar (S32: 52 de 63 rechazos de
+     * septiembre eran pagos ya imputados por otro lado o subidos dos veces).
+     */
+    const [dup, setDup] = useState<Duplicados | null>(null);
+    const [confirmaDistinto, setConfirmaDistinto] = useState(false);
+    useEffect(() => {
+        setDup(null); setConfirmaDistinto(false);
+        const m = Number(monto);
+        if (!codCliente || !(m > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
+        let vivo = true;
+        const t = window.setTimeout(async () => {
+            try {
+                const qs = new URLSearchParams({ cod_cliente: codCliente, monto: String(m), fecha });
+                const res = await fetch(`/api/recibos/posibles-duplicados?${qs}`, { headers: authHeaders() });
+                const d = await res.json();
+                if (vivo && res.ok && d?.ok) setDup(d);
+            } catch { /* es un aviso: si no contesta, la carga sigue como siempre */ }
+        }, 600);
+        return () => { vivo = false; window.clearTimeout(t); };
+    }, [codCliente, monto, fecha]);
+    const pideConfirmar = hayDuplicados(dup) && !confirmaDistinto;
 
     // Mismo buscador que Pedidos (utils/buscarClientes, con tests): sin esto "pena" no
     // encuentra a PEÑA y "bustos sebastian" no encuentra a "BUSTOS, Sebastián (Este)".
@@ -544,6 +594,7 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, on
         const montoNum = Number(monto);
         if (!monto || !isFinite(montoNum) || montoNum <= 0) { setMsg({ kind: 'err', text: 'Ingresá el monto del pago' }); return; }
         if (!fecha) { setMsg({ kind: 'err', text: 'Ingresá la fecha del comprobante (la que aparece en el recibo, no la de hoy)' }); return; }
+        if (pideConfirmar) { setMsg({ kind: 'err', text: 'Revisá el aviso: puede ser un pago que ya figura. Si es otro, confirmalo.' }); return; }
         setBusy(true); setMsg(null);
         try {
             const fd = new FormData();
@@ -703,6 +754,15 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, on
                     </div>
                 )}
 
+                {dup && hayDuplicados(dup) && (
+                    <AvisoDuplicados dup={dup}>
+                        <label className="rec-dup-confirma">
+                            <input type="checkbox" checked={confirmaDistinto} onChange={e => setConfirmaDistinto(e.target.checked)} />
+                            <span>Es un pago distinto: cargarlo igual</span>
+                        </label>
+                    </AvisoDuplicados>
+                )}
+
                 {msg && (
                     <div className={`rec-msg rec-msg--${msg.kind}`}>
                         {msg.kind === 'ok' ? <Check size={16} /> : <AlertCircle size={16} />}
@@ -713,7 +773,7 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, on
                 <div className="rec-form-actions">
                     <button className="btn-secondary" onClick={onCancel} disabled={busy}>Cancelar</button>
                     <button className="btn-primary" onClick={submit}
-                        disabled={busy || (!file && exigeFotoUI(medioPago)) || !codCliente || !monto || !(Number(monto) > 0)}
+                        disabled={busy || (!file && exigeFotoUI(medioPago)) || !codCliente || !monto || !(Number(monto) > 0) || pideConfirmar}
                         title={!monto ? 'Cargá el monto del comprobante' : undefined}>
                         {busy ? <><Loader2 size={16} className="spin" /> Enviando…</> : <><Upload size={16} /> Enviar comprobante</>}
                     </button>
@@ -731,6 +791,62 @@ function cuentaLabel(c: string | null | undefined): string {
     if (c === 'recaudadora_1') return 'MP Recaudadora 1';
     if (c === 'recaudadora_2') return 'MP Recaudadora 2';
     return c ?? '?';
+}
+
+/** Lo que contesta GET /api/recibos/posibles-duplicados. */
+interface Duplicados {
+    app: Array<{ id: string; fecha: string; monto: number; status: string; dias: number; quien: string | null; nombre: string | null; recibo_im: string | null }>;
+    im: Array<{ id_recibo: string; numero: string | null; fecha: string; importe: number; dias: number; cuentas: string[] }>;
+    consultado: { app: boolean; im: boolean };
+}
+
+/** Nombre corto de las cuentas de cobro de Casa Central (plan de cuentas de IM). */
+const CUENTAS_COBRO: Record<string, string> = {
+    '1120003': 'MercadoPago', '1120005': 'Recaudadora 1', '1120006': 'Recaudadora 2', '1120002': 'Banco Nación',
+    '1110009': 'Caja Repartos', '1110005': 'Caja Casa Central', '1110004': 'Caja Chica 2', '1110006': 'Valores a depositar',
+};
+const ddmm = (iso: string) => (iso ?? '').slice(0, 10).split('-').reverse().slice(0, 2).join('/');
+const ROL_CORTO: Record<string, string> = { repartidor: 'chofer', vendedor: 'vendedor', administrativo: 'oficina', admin: 'oficina', gerente: 'oficina' };
+
+function hayDuplicados(d: Duplicados | null): boolean {
+    return !!d && (d.app.length > 0 || d.im.length > 0);
+}
+
+/** El motivo de rechazo que se propone desde el aviso: lo que hoy Anto escribe a mano ("imputado"). */
+function motivoPorDuplicado(d: Duplicados): string {
+    const enIM = d.im[0];
+    if (enIM) return `Ya imputado en IM (recibo ${enIM.numero ?? enIM.id_recibo} del ${ddmm(enIM.fecha)})`;
+    const enApp = d.app[0];
+    return `Subido dos veces (otro comprobante del ${ddmm(enApp.fecha)}${enApp.nombre ? ` cargado por ${enApp.nombre}` : ''})`;
+}
+
+/**
+ * "Este pago puede estar repetido" (S32, 04/10/2026). En septiembre 52 de los 63 rechazos fueron
+ * pagos que ya estaban imputados por otro lado o subidos dos veces. Es un aviso: decide la persona.
+ */
+function AvisoDuplicados({ dup, children }: { dup: Duplicados; children?: ReactNode }) {
+    return (
+        <div className="rec-dup" role="alert">
+            <strong><AlertCircle size={14} /> Este pago puede estar repetido</strong>
+            <ul>
+                {dup.app.map(a => (
+                    <li key={'a' + a.id}>
+                        En la app: {formatMoneyExact(a.monto)} del {ddmm(a.fecha)}
+                        {a.nombre || a.quien ? `, cargado por ${a.nombre ?? ''}${a.quien ? ` (${ROL_CORTO[a.quien] ?? a.quien})` : ''}` : ''} · {statusLabel(a.status)}
+                        {a.recibo_im ? ` · recibo IM ${a.recibo_im}` : ''}
+                    </li>
+                ))}
+                {dup.im.map(r => (
+                    <li key={'i' + r.id_recibo}>
+                        En InfoManager: recibo {r.numero ?? r.id_recibo} del {ddmm(r.fecha)} por {formatMoneyExact(r.importe)}
+                        {r.cuentas.length ? ` · ${r.cuentas.map(c => CUENTAS_COBRO[c] ?? c).join(', ')}` : ''}
+                    </li>
+                ))}
+            </ul>
+            {!dup.consultado.im && <p className="rec-dup-nota">No pude consultar InfoManager: el aviso sólo mira la app.</p>}
+            {children}
+        </div>
+    );
 }
 
 function MPBadge({ rec, isBackoffice, onReverify, onPickMatch }: {
@@ -813,7 +929,7 @@ function MPBadge({ rec, isBackoffice, onReverify, onPickMatch }: {
     );
 }
 
-function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: { id: string; isBackoffice: boolean; clientNameByCod: Map<string, string>; clients: Array<{ cod: string; name: string; localidad?: string }>; onBack: () => void }) {
+function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack, onResuelto, quedan = 0 }: { id: string; isBackoffice: boolean; clientNameByCod: Map<string, string>; clients: Array<{ cod: string; name: string; localidad?: string }>; onBack: () => void; onResuelto?: (id: string) => void; quedan?: number }) {
     const [rec, setRec] = useState<ReciboRow | null>(null);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState<string | null>(null);
@@ -833,6 +949,12 @@ function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: {
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
     const [lightboxOpen, setLightboxOpen] = useState(false);
     const [lightboxZoom, setLightboxZoom] = useState(false);
+    /**
+     * ¿Este pago ya figura en IM o en la app? Antes Anto lo averiguaba mirando IM a mano, y en
+     * septiembre 52 de sus 63 rechazos fueron exactamente eso (S32, 04/10/2026).
+     */
+    const [dup, setDup] = useState<Duplicados | null>(null);
+    const motivoRef = useRef<HTMLInputElement>(null);
 
     // Cerrar lightbox con ESC + reset zoom al cerrar
     useEffect(() => {
@@ -904,7 +1026,11 @@ function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: {
         try {
             const res = await fetch(`/api/recibos/${rec.id}/facturas-candidatas?cod_empresa=${codEmpresa}`, { headers: authHeaders() });
             const data = await res.json();
-            setFacturas(data.facturas ?? []);
+            const lista: FacturaCandidata[] = data.facturas ?? [];
+            setFacturas(lista);
+            // 🔑 Propuesta de imputación: la deuda más vieja primero (Mati, 04/10/2026). Antes había
+            // que tocar factura por factura en cada recibo; ahora se corrige sólo cuando hace falta.
+            if (!esAnticipo) setSelFacturas(preseleccionFIFO(lista, Number(montoFinal)));
         } catch (e: any) { setMsg({ kind: 'err', text: e.message }); }
         finally { setLoadingFacturas(false); }
     };
@@ -935,6 +1061,24 @@ function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: {
         } catch (e: any) { setMsg({ kind: 'err', text: e.message }); }
     };
     useEffect(() => { if (isBackoffice && rec) loadFacturas(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [rec?.id, codEmpresa]);
+
+    useEffect(() => {
+        setDup(null);
+        if (!isBackoffice || !rec || rec.status !== 'pendiente_revision') return;
+        const m = Number(montoFinal) || Number(rec.monto) || 0;
+        const f = (fechaFinal || rec.fecha_comprobante || rec.created_at || '').slice(0, 10);
+        if (!(m > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(f)) return;
+        let vivo = true;
+        const t = window.setTimeout(async () => {
+            try {
+                const qs = new URLSearchParams({ cod_cliente: String(rec.cod_cliente), monto: String(m), fecha: f, excluir_id: rec.id });
+                const res = await fetch(`/api/recibos/posibles-duplicados?${qs}`, { headers: authHeaders() });
+                const d = await res.json();
+                if (vivo && res.ok && d?.ok) setDup(d);
+            } catch { /* es un aviso: si no contesta, se aprueba como siempre */ }
+        }, 300);
+        return () => { vivo = false; window.clearTimeout(t); };
+    }, [isBackoffice, rec, montoFinal, fechaFinal]);
 
     // Cajas de efectivo: se cargan una vez cuando el backoffice abre un recibo en
     // efectivo, para poder elegir a qué caja entra la plata (Casa Central, Caja
@@ -1033,9 +1177,11 @@ function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: {
                 kind: 'ok',
                 text: data.anticipo
                     ? (data.mensaje ?? 'Anticipo registrado. Cargalo a mano en IM.')
-                    : `Imputado. Recibo InfoManager: ${data.recibo_id ?? '(sin id)'}`,
+                    : `Imputado. Recibo InfoManager: ${data.recibo_id ?? '(sin id)'}${onResuelto && quedan > 0 ? ` · sigue el próximo (quedan ${quedan})` : ''}`,
             });
-            setTimeout(onBack, data.anticipo ? 3200 : 1800);
+            // El anticipo trae instrucciones para cargarlo en IM: se deja leer. Lo demás pasa al próximo.
+            if (onResuelto) setTimeout(() => onResuelto(rec.id), data.anticipo ? 3200 : 600);
+            else setTimeout(onBack, data.anticipo ? 3200 : 1800);
         } catch (e: any) { setMsg({ kind: 'err', text: e.message }); }
         finally { setBusy(false); }
     };
@@ -1052,7 +1198,8 @@ function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: {
             const data = await parseRes(res);
             if (!res.ok || !data.ok) { setMsg({ kind: 'err', text: data.error }); return; }
             setMsg({ kind: 'ok', text: 'Rechazado' });
-            setTimeout(onBack, 1200);
+            if (onResuelto) setTimeout(() => onResuelto(rec.id), 600);
+            else setTimeout(onBack, 1200);
         } catch (e: any) { setMsg({ kind: 'err', text: e.message }); }
         finally { setBusy(false); }
     };
@@ -1172,6 +1319,14 @@ function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: {
                     {isBackoffice && (rec.status === 'pendiente_revision' || rec.status === 'error') && (
                         <div className="rec-approval">
                             <h4>{esAnticipo ? 'Imputar como anticipo' : 'Imputar a facturas'}</h4>
+                            {dup && hayDuplicados(dup) && (
+                                <AvisoDuplicados dup={dup}>
+                                    <button type="button" className="btn-danger rec-dup-rechazar"
+                                        onClick={() => { setMotivoRechazo(motivoPorDuplicado(dup)); motivoRef.current?.focus(); }}>
+                                        Rechazar: ya figura
+                                    </button>
+                                </AvisoDuplicados>
+                            )}
 
                             <label className="rec-anticipo-toggle">
                                 <input type="checkbox" checked={esAnticipo} onChange={e => setEsAnticipo(e.target.checked)} />
@@ -1257,6 +1412,10 @@ function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: {
                             {!esAnticipo && (
                                 <div className="rec-approval-summary">
                                     <span>Total a imputar: <strong>{formatMoneyExact(totalImputado)}</strong> / {formatMoneyExact(Number(montoFinal))}</span>
+                                    <button type="button" className="rec-chip rec-fifo" onClick={() => setSelFacturas(preseleccionFIFO(facturas, Number(montoFinal)))}
+                                        title="Vuelve a repartir el monto empezando por la factura más vieja">
+                                        ↺ Más vieja primero
+                                    </button>
                                     {Math.abs(totalImputado - Number(montoFinal)) > 5 && (
                                         <span className="rec-warn">
                                             ⚠ Diferencia: ${(Number(montoFinal) - totalImputado).toFixed(2)}
@@ -1274,6 +1433,7 @@ function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: {
 
                             <div className="rec-approval-actions">
                                 <input
+                                    ref={motivoRef}
                                     type="text"
                                     placeholder="Motivo de rechazo (si aplica)"
                                     value={motivoRechazo}
@@ -1287,7 +1447,7 @@ function DetalleRecibo({ id, isBackoffice, clientNameByCod, clients, onBack }: {
                                         : (Object.keys(selFacturas).length === 0 || Math.abs(totalImputado - Number(montoFinal)) > 5))}
                                     onClick={aprobar}
                                     title={disabledReason}>
-                                    {busy ? <><Loader2 size={14} className="spin" /> {esAnticipo ? 'Registrando…' : 'Emitiendo…'}</> : <><Check size={14} /> {esAnticipo ? 'Registrar anticipo (cargar a mano en IM)' : 'Aprobar y emitir recibo'}</>}
+                                    {busy ? <><Loader2 size={14} className="spin" /> {esAnticipo ? 'Registrando…' : 'Emitiendo…'}</> : <><Check size={14} /> {esAnticipo ? 'Registrar anticipo (cargar a mano en IM)' : (onResuelto && quedan > 0 ? 'Aprobar, emitir y seguir' : 'Aprobar y emitir recibo')}</>}
                                 </button>
                             </div>
                         </div>

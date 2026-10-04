@@ -305,7 +305,9 @@
 .rec-factura label span { font-size: 11px; color: #6e7670 }
 .rec-importe-input { width: 120px; padding: 6px 10px; border: 1px solid rgba(20,24,20,.12); border-radius: 10px; font-family: inherit; font-size: 13px; text-align: right }
 
-.rec-approval-summary { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600 }
+.rec-approval-summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; font-weight: 600 }
+/* Volver a repartir de la factura más vieja a la más nueva (S32). */
+.rec-fifo { font-size: 12px; font-weight: 500 }
 .rec-warn { color: #A83E2B }
 
 .rec-approval-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
@@ -628,3 +630,16 @@
     color: var(--color-warning, #8A5A12);
     font-size: 12px; line-height: 1.35;
 }
+
+/* "Este pago puede estar repetido" (S32, 04/10/2026): aviso, no bloqueo. */
+.rec-dup {
+    background: #FFF6E0; border: 1px solid #EEC045; border-radius: 12px; padding: 10px 12px;
+    font-size: 13px; color: #5c4510; display: flex; flex-direction: column; gap: 6px;
+}
+.rec-dup > strong { display: flex; align-items: center; gap: 6px }
+.rec-dup ul { margin: 0; padding-left: 18px }
+.rec-dup li { margin: 2px 0 }
+.rec-dup-nota { margin: 0; font-size: 12px; color: #6e5a24 }
+.rec-dup-confirma { display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer }
+.rec-dup-confirma input { width: 18px; height: 18px }
+.rec-dup-rechazar { align-self: flex-start }

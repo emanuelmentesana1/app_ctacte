@@ -29,6 +29,7 @@ import {
   uploadRecibo, listRecibos, getReciboById, facturasCandidatas, aprobarRecibo, rechazarRecibo, editarRecibo, cuentasDebug, cuentasRefresh, cuentasEfectivo,
   reverificarMP, elegirMatchMP, procesarColaMP, caducarRecibosPendientes, mpConfig
 } from './server-lib/recibos.js';
+import { posiblesDuplicadosRecibo } from './server-lib/recibosDuplicados.js';
 import { listGoals, setGoal, syncVentasNow, setMonthConfig, listClientesObjetivo, debugClienteAvance, getGoalsSnapshot, botGoals, codsVendedoresActivos } from './server-lib/goals.js';
 import { armarAvisoDeuda, formatearAvisoDeuda, publicarEnSlack } from './server-lib/avisoDeuda.js';
 import { hoyArgentina } from './src/utils/hoyArgentina.js';
@@ -672,6 +673,8 @@ app.post('/api/recibos/upload', requireJwt, upload.single('foto'), cleanupUpload
 app.get('/api/recibos', requireJwt, (req: any, res) => listRecibos(req, res));
 // IMPORTANTE: antes de /api/recibos/:id para que ":id" no capture "mp-config".
 app.get('/api/recibos/mp-config', requireJwt, (req: any, res) => mpConfig(req, res));
+// ¿Este pago ya figura en la app o en IM? Aviso antes de cargar y de aprobar (S32).
+app.get('/api/recibos/posibles-duplicados', requireJwt, (req: any, res) => posiblesDuplicadosRecibo(req, res));
 app.get('/api/recibos/:id', requireJwt, (req: any, res) => getReciboById(req, res));
 app.get('/api/recibos/:id/facturas-candidatas', requireJwt, (req: any, res) => facturasCandidatas(req, res));
 app.post('/api/recibos/:id/aprobar', requireJwt, (req: any, res) => aprobarRecibo(req, res));
