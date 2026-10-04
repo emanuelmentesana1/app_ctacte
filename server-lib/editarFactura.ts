@@ -10,7 +10,7 @@ import { emitirFactura, emitirRemito, emitirRemitoMasivo, letraDeFactura, type R
 import { articulosSinStockDelError, frenaSiNoPuede } from './facturarPresupuestos.js';
 import { exigirTipoEmpresa, ErrorVersion } from './versionPresupuesto.js';
 import { usuarioIM } from './pedidos.js';
-import { pesoDeRenglones } from './pesoComprobante.js';
+import { pesoDeRenglones, sinPesoAProposito } from './pesoComprobante.js';
 import { invalidarVista } from './vistaPresupuestos.js';
 import { invalidarRemitos } from './vistaRemitos.js';
 import {
@@ -181,7 +181,10 @@ function depsReales(actor: string): DepsEdicion {
     },
     reemplazarEnHoja: async (op, renglones) => {
       const catalogo = await fetchArticulosCatalogo();
-      const peso = pesoDeRenglones(renglones.map(r => ({ cantidad: r.cantidad, equivalencia_um: catalogo.get(r.cod_articulo)?.equivalencia_um })));
+      const peso = pesoDeRenglones(renglones.map(r => ({
+        cantidad: r.cantidad, equivalencia_um: catalogo.get(r.cod_articulo)?.equivalencia_um,
+        sin_peso_a_proposito: sinPesoAProposito(r.cod_articulo, catalogo.get(r.cod_articulo)),
+      })));
       const factura = op.fa_nueva ?? { id: op.fa_vieja.id, numero: op.fa_vieja.numero };
       const { data, error } = await sb().rpc('reemplazar_remito_en_hoja', {
         p_tenant: TENANT_ID, p_actor: actor,

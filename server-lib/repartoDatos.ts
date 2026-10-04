@@ -1,6 +1,6 @@
 import { actualizarImportesFacturas } from './importesFacturas.js';
 import { sb, TENANT_ID } from './supabase.js';
-import { pesoDeRenglones, type RenglonPesable } from './pesoComprobante.js';
+import { pesoDeRenglones, sinPesoAProposito, type RenglonPesable } from './pesoComprobante.js';
 import { itemsPorFechas } from './itemsRango.js';
 import { aparearFacturas } from './aparearFactura.js';
 import { fetchVentas, fetchArticulosCatalogo, fetchClientesIMCached } from './infomanager.js';
@@ -81,7 +81,10 @@ export async function verificarEntregas(entrada: any[], rango?: { desde?: string
     if (!['PR', 'RE'].includes(tipo) || Number(v.cod_empresa) !== Number(process.env.PEDIDO_EMPRESA_DEFAULT || 1) ||
       String(v.anulada ?? '').trim().toUpperCase() === 'S') throw new ErrorReparto('El comprobante cambió, no está vigente o no pertenece a Casa Central. Actualizá.');
     const rs = detalle.items.filter(it => String(it.id_comprobante) === String(v.id));
-    const peso = pesoDeRenglones(rs.map(it => ({ cantidad: it.cantidad, equivalencia_um: cat.get(Number(it.cod_articulo))?.equivalencia_um })));
+    const peso = pesoDeRenglones(rs.map(it => ({
+      cantidad: it.cantidad, equivalencia_um: cat.get(Number(it.cod_articulo))?.equivalencia_um,
+      sin_peso_a_proposito: sinPesoAProposito(it.cod_articulo, cat.get(Number(it.cod_articulo))),
+    })));
     const cliente = clientes.find(c => Number(c.cod_cliente) === Number(v.cod_cliente));
     const fa = pares.get(String(v.id));
     return { factura_origen: fa?.origen ?? 'ninguna', im_factura_id: fa?.im_factura_id ?? null, im_factura_numero: fa?.im_factura_numero ?? null,
@@ -234,6 +237,7 @@ async function renglonesDeEntregas(filas: any[], actualizar: boolean): Promise<M
       porComprobante.get(k)!.push({
         cantidad: (it as any).cantidad,
         equivalencia_um: cat.get(Number((it as any).cod_articulo))?.equivalencia_um,
+        sin_peso_a_proposito: sinPesoAProposito((it as any).cod_articulo, cat.get(Number((it as any).cod_articulo))),
       });
     }
   } catch (e: any) {

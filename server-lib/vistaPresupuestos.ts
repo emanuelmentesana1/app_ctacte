@@ -17,7 +17,7 @@ import {
   fetchVentas, fetchVentasItems, fetchArticulosCatalogo, fetchClientesIMCon,
   fetchStockPorDeposito, invalidarCacheVentas, invalidarCacheItems,
 } from './infomanager.js';
-import { pesoDeRenglones } from './pesoComprobante.js';
+import { pesoDeRenglones, sinPesoAProposito } from './pesoComprobante.js';
 import { zonaDeCliente } from './zonaCliente.js';
 import { revisarCantidades } from './controlCantidades.js';
 import { formatosDeBolsa } from './formatosBolsa.js';
@@ -200,6 +200,7 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
             cod_articulo: Number((it as any).cod_articulo),
             cantidad: (it as any).cantidad,
             equivalencia_um: cat.get(Number((it as any).cod_articulo))?.equivalencia_um,
+            sin_peso_a_proposito: sinPesoAProposito((it as any).cod_articulo, cat.get(Number((it as any).cod_articulo))),
             // Con qué lista y qué descuento quedó el renglón EN INFOMANAGER, ahora mismo.
             cod_lista_precios: Number((it as any).cod_lista_precios) || 0,
             // Crudos, para comparar factura contra remito sin convertir nada. 🪤 El código va

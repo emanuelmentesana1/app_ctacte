@@ -20,7 +20,7 @@ import {
   fetchVentas, fetchVentasItems, fetchArticulosCatalogo, fetchClientesIMCached,
   fechaArgentina, comprobantesPendientesCliente,
 } from './infomanager.js';
-import { pesoDeRenglones, cargaDelCamion } from './pesoComprobante.js';
+import { pesoDeRenglones, cargaDelCamion, sinPesoAProposito } from './pesoComprobante.js';
 import { vistaDeRango, invalidarVista } from './vistaPresupuestos.js';
 import { vistaRemitos, invalidarRemitos } from './vistaRemitos.js';
 import { armarFraccionado, totalesFraccionado } from './fraccionado.js';
@@ -711,6 +711,7 @@ export async function asignarPedidos(req: Request & { user?: JwtPayload }, res: 
         porComprobante.get(k)!.push({
           cantidad: (it as any).cantidad,
           equivalencia_um: cat.get(Number((it as any).cod_articulo))?.equivalencia_um,
+          sin_peso_a_proposito: sinPesoAProposito((it as any).cod_articulo, cat.get(Number((it as any).cod_articulo))),
         });
       }
       for (const p of entrada) {

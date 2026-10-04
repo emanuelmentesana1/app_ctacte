@@ -28,7 +28,7 @@ import { sb, TENANT_ID } from './supabase.js';
 import {
   fetchVentas, fetchVentasItems, fetchArticulosCatalogo, fetchClientesIMCached,
 } from './infomanager.js';
-import { pesoDeRenglones } from './pesoComprobante.js';
+import { pesoDeRenglones, sinPesoAProposito } from './pesoComprobante.js';
 import { leerPendientes, pesoDePendientes, pendientesParaMostrar } from './pendientesEntrega.js';
 import { zonaDeCliente } from './zonaCliente.js';
 import { aparearFacturas } from './aparearFactura.js';
@@ -119,7 +119,7 @@ async function armarVistaRemitos(desde: string, hasta: string, forzar = false) {
   const fechas = todasLasFechas.slice(-MAX_DIAS_ITEMS);
   // Los que quedaron fuera del tope: sus remitos van a salir sin peso y hay que decirlo.
   const fechasSinPedir = todasLasFechas.slice(0, Math.max(0, todasLasFechas.length - MAX_DIAS_ITEMS));
-  const renglones = new Map<string, Array<{ cod_articulo: number; cantidad: any; equivalencia_um: number | null | undefined }>>();
+  const renglones = new Map<string, Array<{ cod_articulo: number; cantidad: any; equivalencia_um: number | null | undefined; sin_peso_a_proposito?: boolean }>>();
   const diasSinItems: string[] = [...fechasSinPedir];
   for (let i = 0; i < fechas.length; i += 4) {
     const tanda = fechas.slice(i, i + 4);
@@ -139,6 +139,7 @@ async function armarVistaRemitos(desde: string, hasta: string, forzar = false) {
           cod_articulo: Number((it as any).cod_articulo),
           cantidad: (it as any).cantidad,
           equivalencia_um: cat.get(Number((it as any).cod_articulo))?.equivalencia_um,
+          sin_peso_a_proposito: sinPesoAProposito((it as any).cod_articulo, cat.get(Number((it as any).cod_articulo))),
         });
       }
     }

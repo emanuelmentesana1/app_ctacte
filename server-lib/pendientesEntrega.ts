@@ -21,7 +21,7 @@
  * remito original).
  */
 import { sb, TENANT_ID } from './supabase.js';
-import { pesoDeRenglones, type Peso } from './pesoComprobante.js';
+import { pesoDeRenglones, sinPesoAProposito, type Peso } from './pesoComprobante.js';
 
 export interface Pendiente {
   /** La fila en la app. Sin `id`, todavía está sólo escrito en InfoManager. */
@@ -206,6 +206,7 @@ export function pesoDePendientes(ps: Pendiente[], cat: Map<number, any>): Peso {
   return pesoDeRenglones(ps.map(p => ({
     cantidad: p.cantidad,
     equivalencia_um: p.cod_articulo != null ? cat.get(Number(p.cod_articulo))?.equivalencia_um : null,
+    sin_peso_a_proposito: p.cod_articulo != null && sinPesoAProposito(p.cod_articulo, cat.get(Number(p.cod_articulo))),
   })));
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pesoDeRenglones } from './pesoComprobante.js';
+import { pesoDeRenglones, sinPesoAProposito } from './pesoComprobante.js';
 
 /**
  * Bultos y kilos de un pedido. NO es un dato decorativo: **define en qué camión entra la
@@ -97,4 +97,56 @@ it.each(['dato ilegible', '', '  ', null, undefined, NaN, Infinity, -1])('cantid
 });
 it('cero real y string numérico son distintos de una cantidad ilegible', () => {
   expect(pesoDeRenglones([{cantidad:0,equivalencia_um:null},{cantidad:'2',equivalencia_um:25}])).toEqual({kg:50,bultos:2,renglones_sin_peso:0});
+});
+
+/**
+ * SIN PESO A PROPÓSITO (Mati, 03/10/2026): *"los accesorios y los venenos (raticidas, cebos, etc.) NO
+ * llevan peso, y está bien que queden en 0"*. La hoja 3448 (VICTOR, 03/10) salía "Peso estimado · sin
+ * verificar" por macetas, ganchos, un raticida y orejas: renglones que nunca van a tener peso.
+ * Rubros reales de IM: 11 Accesorios y Venenos · 7 Frutos secos · 10 Snack · 4 Comestibles ·
+ * 13 Varios · 8 Insumos para prod.
+ */
+describe('sin peso a propósito: accesorios, venenos y lo que decidió Mati', () => {
+  const art = (cod_rubro: number | null, equivalencia_um: number | null) => ({ cod_rubro, equivalencia_um });
+  const renglon = (cod: number, cantidad: number, rubro: number, eq: number) =>
+    ({ cantidad, equivalencia_um: eq, sin_peso_a_proposito: sinPesoAProposito(cod, art(rubro, eq)) });
+
+  it('🔴 todo el rubro 11 "Accesorios y Venenos" va sin peso a propósito', () => {
+    expect(sinPesoAProposito(1968, art(11, 0))).toBe(true); // ULTRA RATICIDA 30 SOBRES
+    expect(sinPesoAProposito(1212, art(11, null))).toBe(true); // MACETA CLASICA N° 12
+  });
+
+  it('🔴 y cuatro códigos sueltos de otros rubros, por decisión de Mati', () => {
+    // FORRAJES VARIOS · BOLSAS vacías de 1 y 10 kg · NUEZ PELADA LIGHT
+    for (const [cod, rubro] of [[13818, 13], [2100, 8], [2102, 8], [617, 7]]) {
+      expect(sinPesoAProposito(cod, art(rubro, 0)), String(cod)).toBe(true);
+    }
+  });
+
+  it('🔴 un snack sin equivalencia NO: tiene que pesar, y la hoja lo tiene que avisar', () => {
+    expect(sinPesoAProposito(10710, art(10, 0))).toBe(false); // CHIZITO FLOR DEL NORTE X KG
+    expect(sinPesoAProposito(10670, art(4, 0))).toBe(false); // MANI TOSTADO KING X KG
+  });
+
+  it('sin el artículo en el catálogo no se sabe qué es: no se asume nada', () => {
+    expect(sinPesoAProposito(1968, undefined)).toBe(false);
+  });
+
+  it('🔴 hoja 3448: los accesorios y venenos ya no la dejan "sin verificar"; el chizito sí', () => {
+    const peso = pesoDeRenglones([
+      renglon(1968, 36, 11, 0), renglon(1910, 20, 11, 0), renglon(1212, 6, 11, 0), renglon(1215, 6, 11, 0),
+      renglon(957, 22, 11, 0), renglon(617, 2, 7, 0),
+      renglon(10710, 5, 10, 0), // CHIZITO: todavía sin peso cargado
+      renglon(10670, 5, 4, 1), // MANI X KG: 5 kg
+    ]);
+    expect(peso.renglones_sin_peso).toBe(1);
+    expect(peso.kg).toBe(5);
+    expect(peso.bultos).toBe(102);
+  });
+
+  it('si IM tiene un peso cargado, manda el peso aunque sea del rubro 11', () => {
+    const peso = pesoDeRenglones([renglon(1945, 12, 11, 0.25)]); // TALQUERA HORTAL X 250 GR
+    expect(peso.kg).toBe(3);
+    expect(peso.renglones_sin_peso).toBe(0);
+  });
 });

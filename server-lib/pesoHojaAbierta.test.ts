@@ -56,6 +56,15 @@ describe('el peso de una entrega abierta', () => {
     expect(incompleto.renglones_sin_peso).toBe(1);
   });
 
+  it('🔴 un renglón sin peso a propósito (accesorio o veneno) no deja la hoja "sin verificar" (03/10)', () => {
+    const conMaceta = [...RENGLONES, { cantidad: 6, equivalencia_um: 0, sin_peso_a_proposito: true }];
+    const [f] = conPesoDeIM([fila()], new Map([['58840001', conMaceta]]));
+    expect(f.peso_completo).toBe(true);
+    expect(f.renglones_sin_peso).toBe(0);
+    expect(f.kg).toBe(70);
+    expect(f.bultos).toBe(18);
+  });
+
   it('el remito también encuentra sus renglones por su propio id', () => {
     const [f] = conPesoDeIM([fila({ im_remito_id: '77600' })], new Map([['77600', RENGLONES]]));
     expect(f.kg_snapshot).toBe(300);
