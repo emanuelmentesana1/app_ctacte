@@ -3,7 +3,12 @@
 .rd-root { display: flex; flex-direction: column; gap: 0.75rem; max-width: 1100px; margin: 0 auto; width: 100%; min-width: 0; }
 
 .rd-top { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
-.rd-lectura { font-size: 0.8rem; color: var(--color-text-muted); }
+/* Regla de avisos de la oficina (04/10/2026): lo que no frena va a un ⓘ, con el detalle en el title. */
+.rd-info {
+    display: inline-flex; align-items: center; gap: 0.3rem; align-self: flex-start;
+    border: 1px solid var(--color-border); border-radius: 999px; padding: 0.15rem 0.6rem;
+    font-size: 0.78rem; color: var(--color-text-muted); cursor: help; white-space: pre-line;
+}
 .rd-girando { animation: rd-girar 1s linear infinite; color: var(--color-text-muted); }
 @keyframes rd-girar { to { transform: rotate(360deg); } }
 .rd-btn {
@@ -43,14 +48,6 @@
 .rd-asiento-estado { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 700; }
 .rd-asiento.ok .rd-asiento-estado { color: #0B6B34; }
 .rd-asiento.mal .rd-asiento-estado { color: #A83E2B; }
-.rd-asiento-otros { font-size: 0.78rem; color: #8a5a00; }
-
-.rd-fuera {
-    background: #FFF6E0; border: 1px solid #EEC045; border-radius: var(--radius-md);
-    padding: 0.55rem 0.8rem; font-size: 0.84rem; color: #5c4510;
-}
-.rd-fuera ul { margin: 0.3rem 0; padding-left: 1.1rem; }
-.rd-fuera small { color: #6e5a24; }
 
 .rd-hoja { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
 .rd-hoja-head { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.65rem 0.85rem; cursor: pointer; }

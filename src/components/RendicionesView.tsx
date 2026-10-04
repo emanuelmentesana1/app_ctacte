@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, AlertTriangle, RefreshCw, Banknote, CheckCircle2 } from 'lucide-react';
+import { Loader2, AlertTriangle, RefreshCw, Banknote, CheckCircle2, Info } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import { useLecturaVigente } from '../utils/useLecturaVigente';
 import './RendicionesView.css';
@@ -11,6 +11,9 @@ import './RendicionesView.css';
  * recibos de efectivo en InfoManager (Caja Repartos), transferencias en la app, notas de crédito
  * y gastos del viaje. Y si la caja del día cuadra con el asiento que pasó la plata a Caja Casa
  * Central. No emite, no cierra y no aprueba nada: eso llega en las etapas siguientes.
+ *
+ * Regla de avisos de la oficina (Mati, 04/10/2026): un aviso visible por pantalla, primero lo que
+ * frena; lo informativo va a un ⓘ, con una línea corta y el detalle en el `title`.
  */
 
 type Estado = 'pago' | 'parcial' | 'de_mas' | 'sin_cobro';
@@ -101,7 +104,9 @@ export function RendicionesView({ desde, hasta }: { desde: string; hasta: string
     return (
         <div className="rd-root">
             <div className="rd-top">
-                <span className="rd-lectura">Sólo lectura: lo que ya está cargado en InfoManager y en la app. No emite nada.</span>
+                <span className="rd-info" title="Muestra lo que ya está cargado: los recibos de efectivo y el libro mayor de Caja Repartos en InfoManager, y las transferencias de la app. No emite, no cierra y no aprueba nada.">
+                    <Info size={13} /> Sólo lectura
+                </span>
                 {cargando && <Loader2 size={16} className="rd-girando" />}
                 <button className="rd-btn ghost" onClick={() => setRefrescar(n => n + 1)} disabled={cargando} title="Vuelve a consultar InfoManager">
                     <RefreshCw size={14} /> Actualizar
@@ -134,21 +139,15 @@ export function RendicionesView({ desde, hasta }: { desde: string; hasta: string
                             <b>{diaLargo(d.fecha)}</b>
                             <span className="rd-gris">{d.hojas.length} {d.hojas.length === 1 ? 'hoja' : 'hojas'}</span>
                             {!d.asientos.length && <span className="rd-chip gris">Sin rendir en IM todavía</span>}
+                            {d.fuera && (
+                                <span className="rd-info rd-fuera"
+                                    title={`Cobros a clientes que no estaban en ninguna hoja del día. Entran en la caja del día y en el cuadre del asiento:\n${d.fuera.recibos.map(r => `· ${r.cliente ?? `Cliente ${r.cod_cliente}`} — recibo ${r.numero ?? r.id_recibo} — ${money(r.importe)}`).join('\n')}`}>
+                                    <Info size={13} /> Fuera de hoja: {money(d.fuera.total)} ({d.fuera.recibos.length} {d.fuera.recibos.length === 1 ? 'cobro' : 'cobros'})
+                                </span>
+                            )}
                         </div>
                         {d.asientos.map(a => <ResumenAsiento key={a.id} a={a} />)}
                     </div>
-
-                    {d.fuera && (
-                        <div className="rd-fuera">
-                            <b>Cobros a clientes que no estaban en ninguna hoja del día ({money(d.fuera.total)})</b>
-                            <ul>
-                                {d.fuera.recibos.map(r => (
-                                    <li key={r.id_recibo}>{r.cliente ?? `Cliente ${r.cod_cliente}`} · recibo {r.numero ?? r.id_recibo} · {money(r.importe)}</li>
-                                ))}
-                            </ul>
-                            <small>Entran en la caja del día y en el cuadre del asiento.</small>
-                        </div>
-                    )}
 
                     {d.hojas.map(h => (
                         <TarjetaHoja key={h.id} h={h} abierta={abierta === h.id} onToggle={() => setAbierta(x => x === h.id ? null : h.id)} />
@@ -157,6 +156,20 @@ export function RendicionesView({ desde, hasta }: { desde: string; hasta: string
             ))}
         </div>
     );
+}
+
+/** La cuenta del asiento, para el ⓘ: cobrado − gastos − otros pagos → entregado ± diferencia. */
+function detalleAsiento(a: Asiento): string {
+    const otros = a.otros_pagos.reduce((s, o) => s + o.importe, 0);
+    const lineas = [
+        `Cobrado en efectivo (Caja Repartos): ${money(a.cobrado_efectivo)}${a.cobrado_fuera_de_hoja ? `, ${money(a.cobrado_fuera_de_hoja)} de clientes fuera de hoja` : ''}`,
+        a.gastos ? `− Gastos del viaje: ${money(a.gastos)}` : '',
+        otros ? `− Otros pagos con esa caja: ${money(otros)} (${a.otros_pagos.map(o => o.descripcion.replace(/^\s*Caja Repartos -\s*/i, '')).join(' · ')})` : '',
+        `→ Entregado a Caja Casa Central: ${money(a.entregado)}`,
+        `Diferencia calculada: ${money(a.diferencia_calculada)}`,
+        a.diferencia_registrada != null ? `Diferencia de caja registrada en IM: ${money(a.diferencia_registrada)}` : 'Sin asiento de diferencia de caja ese día',
+    ];
+    return lineas.filter(Boolean).join('\n');
 }
 
 function ResumenAsiento({ a }: { a: Asiento }) {
@@ -168,16 +181,9 @@ function ResumenAsiento({ a }: { a: Asiento }) {
                 {a.cuadra === false && <><AlertTriangle size={14} /> No cuadra por {money(Math.abs(descuadre))}</>}
                 {a.cuadra === null && <>Asiento con hojas fuera de este rango ({a.hojas_fuera.join(', ')})</>}
             </span>
-            <span className="rd-asiento-detalle">
-                Asiento del {ddmm(a.fecha)} (hojas {a.hojas.join(', ')}): cobrado en efectivo {money(a.cobrado_efectivo)}
-                {a.gastos > 0 && <> − gastos {money(a.gastos)}</>}
-                {a.otros_pagos.length > 0 && <> − otros pagos {money(a.otros_pagos.reduce((s, o) => s + o.importe, 0))}</>}
-                {' '}→ entregado a Caja Casa Central {money(a.entregado)}
-                {a.diferencia_registrada != null && <> · diferencia de caja registrada {money(a.diferencia_registrada)}</>}
+            <span className="rd-info" title={detalleAsiento(a)}>
+                <Info size={13} /> Asiento del {ddmm(a.fecha)} · hojas {a.hojas.join(', ')}
             </span>
-            {a.otros_pagos.length > 0 && (
-                <span className="rd-asiento-otros">Otros pagos con esa caja: {a.otros_pagos.map(o => `${o.descripcion.replace(/^\s*Caja Repartos -\s*/i, '')} (${money(o.importe)})`).join(' · ')}</span>
-            )}
         </div>
     );
 }

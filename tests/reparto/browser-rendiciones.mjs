@@ -81,8 +81,10 @@ try {
     try {
       const dia = await page.locator('.rd-dia').first().innerText();
       assert(/no cuadra/i.test(dia) && dia.includes('367'), `No avisa la diferencia: ${dia}`);
-      const fuera = await page.locator('.rd-fuera').first().innerText();
-      assert(fuera.includes('CLIENTE OMEGA') && fuera.includes('1.453.417'), `No muestra el cobro fuera de hoja: ${fuera}`);
+      // Regla de avisos de la oficina (Mati, 04/10): lo informativo es una línea corta y el detalle va al ⓘ.
+      const fuera = page.locator('.rd-fuera').first();
+      assert((await fuera.innerText()).includes('1.453.417'), `No muestra el total fuera de hoja: ${await fuera.innerText()}`);
+      assert((await fuera.getAttribute('title') ?? '').includes('CLIENTE OMEGA'), 'El detalle del cobro fuera de hoja no está en el ⓘ');
     } finally { await ctx.close(); }
   });
 
@@ -90,6 +92,9 @@ try {
     const { page, ctx } = await abrir(1440, respuesta());
     try {
       await page.locator('.rd-hoja').first().waitFor();
+      const info = page.locator('.rd-info', { hasText: 'Sólo lectura' });
+      assert(await info.count() === 1, 'Falta el ⓘ de "Sólo lectura"');
+      assert(/no emite/i.test(await info.getAttribute('title') ?? ''), 'El ⓘ no explica que no emite nada');
       const botones = await page.locator('.rd-root button').allInnerTexts();
       assert(!botones.some(b => /emitir|cerrar|aprobar|imputar/i.test(b)), `Hay botones que escriben: ${botones.join(' | ')}`);
     } finally { await ctx.close(); }
