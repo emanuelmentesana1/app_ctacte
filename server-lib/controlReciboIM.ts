@@ -1,9 +1,9 @@
 /**
  * ¿Los recibos que emitió la app siguen en InfoManager? Lógica pura.
  *
- * S32 · mejora 7 (04/10/2026). En septiembre, 3 recibos emitidos por la app ya no existían en IM
- * (los borraron allá; dos se volvieron a cargar a mano, uno en otra caja y con otra fecha) y la
- * app los seguía mostrando como imputados. `GET /api/v2/recibos` no lista los anulados ni los
+ * S32 · mejora 7 (04/10/2026). En septiembre, 2 recibos emitidos por la app ya no existían en IM
+ * (los borraron allá y se volvieron a cargar a mano, uno en otra caja y con otra fecha) y la app
+ * los seguía mostrando como imputados. Un tercero sigue en IM, pero le corrieron la fecha. `GET /api/v2/recibos` no lista los anulados ni los
  * borrados: el que falta es justamente el que hay que mirar.
  */
 export interface ImputadoApp {

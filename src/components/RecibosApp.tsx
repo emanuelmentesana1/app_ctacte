@@ -359,7 +359,7 @@ function LoteMercadoPago({ clientNameByCod, onCerrar }: { clientNameByCod: Map<s
 
 /**
  * Recibos que emitió la app y que InfoManager ya no tiene (S32 · mejora 7, 04/10/2026): se borraron
- * o anularon allá después de emitirse, y la app los seguía mostrando como imputados (3 en
+ * o anularon allá después de emitirse, y la app los seguía mostrando como imputados (2 en
  * septiembre). Es un informe para la oficina: no frena nada, por eso va plegado.
  */
 function ControlRecibosIM({ clientNameByCod }: { clientNameByCod: Map<string, string> }) {

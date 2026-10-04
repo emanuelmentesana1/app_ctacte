@@ -4,6 +4,8 @@
  * (regla de avisos de Mati, 04/10/2026: "lo que arregla otra persona va a un informe en la app").
  *
  * Una o dos consultas a IM por rango (GET /api/v2/recibos), cacheadas 30 minutos.
+ *
+ * Medido en producción el 04/10: de 551 recibos de la app (35 días), 2 ya no existen en IM.
  */
 import type { Request, Response } from 'express';
 import { sb, TENANT_ID } from './supabase.js';
@@ -13,6 +15,14 @@ import { getV2, imV2Configurada } from './imApiV2.js';
 import { recibosQueFaltanEnIM, type ImputadoApp } from './controlReciboIM.js';
 
 const CACHE_MS = 30 * 60_000;
+/**
+ * 🪤 Margen de días alrededor del rango: en IM a veces le corren la fecha a un recibo (el 58697388,
+ * del 01/09, lo editaron el 16/09 y quedó fechado el 31/08). Sin margen, quedaba fuera del rango
+ * consultado y se informaba como faltante sin serlo.
+ */
+const MARGEN_DIAS = 7;
+const sumarDias = (iso: string, n: number) =>
+  new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) + n * 86_400_000).toISOString().slice(0, 10);
 const cache = new Map<number, { at: number; cuerpo: unknown }>();
 
 interface FilaImputada { id: string; cod_cliente: number; monto: number | string; fecha_comprobante: string | null; infomanager_recibo_id: string | null; imputado_at: string | null; cod_empresa: number | null; reviewed_by: string | null }
@@ -43,11 +53,11 @@ export async function controlRecibosIM(req: Request & { user?: JwtPayload }, res
   const filas = (data ?? []) as FilaImputada[];
   if (!filas.length) { res.json({ ok: true, dias, revisados: 0, faltan: [] }); return; }
 
-  // La fecha del recibo en IM es la del comprobante (verificado: 487 de 488 en septiembre).
+  // La fecha del recibo en IM es la del comprobante (487 de 488 en septiembre; el otro lo editaron en IM).
   const fechas = filas.map(f => (f.fecha_comprobante || f.imputado_at || '').slice(0, 10)).filter(Boolean).sort();
   const empresas = [...new Set(filas.map(f => String(f.cod_empresa ?? 1)))].join(',');
   let enIM: Array<{ id_recibo: number | string }>;
-  try { enIM = await recibosIMDelRango(fechas[0], fechas.at(-1) as string, empresas); }
+  try { enIM = await recibosIMDelRango(sumarDias(fechas[0], -MARGEN_DIAS), sumarDias(fechas.at(-1) as string, MARGEN_DIAS), empresas); }
   catch (e) {
     // Sin la lista de IM no se puede decir qué falta: un error claro, nunca faltantes inventados.
     res.status(502).json({ error: `InfoManager no devolvió los recibos (${e instanceof Error ? e.message : String(e)}).` }); return;

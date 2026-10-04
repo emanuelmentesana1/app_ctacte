@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { recibosQueFaltanEnIM, type ImputadoApp } from './controlReciboIM.js';
 
 /**
- * S32 · mejora 7 (04/10/2026). En septiembre, 3 recibos que emitió la app ya no estaban en IM: los
+ * S32 · mejora 7 (04/10/2026). En septiembre, 2 recibos que emitió la app ya no estaban en IM: los
  * borraron allá y dos se volvieron a cargar a mano. La app los seguía mostrando como imputados.
  */
 const ap = (p: Partial<ImputadoApp>): ImputadoApp => ({

@@ -43,6 +43,15 @@ describe('controlRecibosIM', () => {
     expect(r.body.faltan).toEqual([expect.objectContaining({ id: 'a', infomanager_recibo_id: '58884698', reviewed_by_nombre: 'Anto' })]);
   });
 
+  it('🪤 un recibo al que en IM le corrieron la fecha antes del rango NO es un faltante', async () => {
+    // Caso real: el 58697388 (comprobante del 01/09) lo editaron en IM el 16/09 y quedó fechado el 31/08.
+    m.filas = [fila('c', '58697388', { fecha_comprobante: '2026-09-01' })];
+    m.getV2.mockImplementation(async (_ruta: string, p: any) => ({ results: p.fecha_desde <= '2026-08-31' ? [{ id_recibo: 58697388 }] : [], totalPages: 1 }));
+    const r = res();
+    await controlRecibosIM(req('administrativo', { refrescar: '1' }), r);
+    expect(r.body.faltan).toEqual([]);
+  });
+
   it('si IM no contesta, error claro: no se inventan faltantes', async () => {
     m.getV2.mockRejectedValue(new Error('IM caído'));
     const r = res();
