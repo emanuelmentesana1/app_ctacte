@@ -54,3 +54,18 @@ export function recortarHasta<T extends { fecha?: unknown }>(ventas: T[], hasta:
    */
   return ventas.filter(v => String(v?.fecha ?? '').slice(0, 10) <= hasta);
 }
+
+/**
+ * Los `dias` días ANTERIORES a `desde` (sin incluirlo), o `null` si la fecha no es legible.
+ *
+ * ⏱️ 04/10/2026: la oficina factura con fecha anterior a la del pedido (del 02/10, 20 de 43
+ * comprobantes estaban fechados el 29/09 o el 01/10), y lo que no entra en el listado del rango
+ * se lee de a uno. Ver tableroFacturacion.
+ */
+export function diasAnteriores(desde: string, dias: number): { desde: string; hasta: string } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(desde ?? ''))) return null;
+  const n = Math.max(1, Math.min(TOPE_DIAS, Math.trunc(Number(dias) || 0)));
+  const base = Date.parse(`${desde}T00:00:00Z`);
+  const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  return { desde: iso(base - n * 864e5), hasta: iso(base - 864e5) };
+}

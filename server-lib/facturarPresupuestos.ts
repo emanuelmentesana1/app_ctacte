@@ -93,7 +93,9 @@ const PEDIDO_LISTA_FALLBACK = Number(process.env.PEDIDO_LISTA_FALLBACK || 12);
 /** Tope de días de renglones que se piden de una vez. Cada día es una consulta a IM. */
 const MAX_DIAS_FACTURA = 6;
 /** Ventana explícita para adelantos: se limita emisión y se verifica el mismo horizonte. */
-import { hastaConAdelanto, recortarHasta } from './rangoConAdelanto.js';
+import { hastaConAdelanto, recortarHasta, diasAnteriores } from './rangoConAdelanto.js';
+/** Cuántos días antes del rango se buscan facturas y remitos (ver tableroFacturacion). Corto: entra en el cache de /ventas. */
+const DIAS_ATRAS_BUSQUEDA = 7;
 const MAX_ADELANTO_DIAS = Math.max(0, Math.min(31, Number(process.env.IM_MAX_ADELANTO_FACTURA_DIAS ?? 7) || 0));
 const fechaMaximaEmision = () => fechaArgentina(Date.now() + MAX_ADELANTO_DIAS * 864e5);
 /** El depósito del que sale la mercadería: es contra el que el remito valida stock. */
@@ -1098,6 +1100,14 @@ async function soltarReclamo(f: PresupuestoAFacturar): Promise<void> {
  * Ninguna de las dos frena nada si falla: los comprobantes ya están emitidos y registrados, y
  * dejar el presupuesto confirmado es un problema de pantalla, no de plata.
  */
+/** Cierra los pedidos de una tanda de a 4 en paralelo. Nunca tira: cada cierre sólo avisa por log. */
+async function cerrarCircuitos(fs: PresupuestoAFacturar[]): Promise<void> {
+  for (let i = 0; i < fs.length; i += 4) {
+    await Promise.all(fs.slice(i, i + 4).map(f => cerrarCircuito(f).catch((e: any) =>
+      console.warn(`[facturarSeleccion] no pude cerrar el PR ${f.im_numero}:`, e?.message))));
+  }
+}
+
 async function cerrarCircuito(f: PresupuestoAFacturar): Promise<void> {
   const desc = await desconfirmarPresupuesto(f.im_comprobante_id);
   if (!desc.ok) console.warn(`[facturarSeleccion] no pude desconfirmar el PR ${f.im_numero}:`, desc.error);
@@ -1160,6 +1170,12 @@ export async function facturarSeleccion(req: Request & { user?: JwtPayload }, re
    * qué llegó a emitirse".
    */
   let empezoAEmitir = false;
+  /**
+   * ⏱️ Los pedidos ya facturados que falta "cerrar" (desconfirmar en IM, marcar el del vendedor).
+   * Se cierran al final y juntos: dentro del bucle eran ~1 s de cada pedido de la tanda, y no
+   * frenan nada si fallan (ver `cerrarCircuito`). Medido el 04/10/2026: 6,9 s de mediana por pedido.
+   */
+  const porCerrar: PresupuestoAFacturar[] = [];
   const sinEmitir = (status: number, error: string) => { res.status(status).json({ error, nada_emitido: true }); };
   try {
     const ids = idsDe(req);
@@ -1395,7 +1411,7 @@ export async function facturarSeleccion(req: Request & { user?: JwtPayload }, re
         const cerrado = await cerrarSobreRemitoExistente(f, { facturaId, facturaNumero, tipoFactura });
         if (!cerrado.ok) { fallados.push(`${quien}: ${cerrado.error}`); cortado = `${quien}: ${cerrado.error} Se frenó el resto.`; continue; }
         if (cerrado.aviso) fallados.push(`⚠️ ${quien}: ${cerrado.aviso}`);
-        await cerrarCircuito(f);
+        porCerrar.push(f);
         if (errorPendientes) fallados.push(`⚠️ ${quien}: se facturó, pero no pude pasar a la app lo que lleva sin cobrar (${errorPendientes}): no va a salir en el remito impreso ni en la hoja de ruta.`);
         hechos.push({ cliente: f.cliente_nombre, factura: facturaNumero, remito: f.im_remito_numero, tipo: tipoFactura });
         continue;
@@ -1561,14 +1577,16 @@ export async function facturarSeleccion(req: Request & { user?: JwtPayload }, re
         fallados.push(`${quien}: salieron la factura ${facturaNumero} y el remito ${re.numero}. Ojo que quedó stock en negativo: ${remitoForzado}.`);
       }
 
-      // 3) El presupuesto sale de la ventana de la oficina y el pedido del vendedor se marca.
-      await cerrarCircuito(f);
+      // 3) El presupuesto sale de la ventana de la oficina y el pedido del vendedor se marca: al
+      // final de la tanda (ver `porCerrar`).
+      porCerrar.push(f);
 
       if (errorPendientes) fallados.push(`⚠️ ${quien}: se facturó, pero no pude pasar a la app lo que lleva sin cobrar (${errorPendientes}): no va a salir en el remito impreso ni en la hoja de ruta.`);
       hechos.push({ cliente: f.cliente_nombre, factura: facturaNumero, remito: re.numero, tipo: tipoFactura });
       } finally { if (control) await desbloquearPresupuesto(String(f.im_comprobante_id), control); }
     }
 
+    await cerrarCircuitos(porCerrar);
     invalidarIM(); invalidarVista(); invalidarRemitos();
     res.json({
       ok: !fallados.length && !cortado,
@@ -1576,6 +1594,8 @@ export async function facturarSeleccion(req: Request & { user?: JwtPayload }, re
       quedan_sin_facturar: preparados.length - hechos.length,
     });
   } catch (err: any) {
+    // Lo que ya se facturó antes del error se cierra igual, como se hacía dentro del bucle.
+    await cerrarCircuitos(porCerrar);
     invalidarIM(); invalidarVista(); invalidarRemitos();
     console.error('[facturarSeleccion]', err?.message);
     if (!empezoAEmitir) { sinEmitir(500, `${String(err?.message ?? 'error').replace(/\.\s*$/, '')}. No se emitió nada: podés volver a intentar.`); return; }
@@ -1643,6 +1663,19 @@ export async function tableroFacturacion(req: Request & { user?: JwtPayload }, r
     const ventasPendientes = hastaBusqueda === hasta
       ? ventasParaBuscar
       : ventasParaBuscar.then(v => v && recortarHasta(v, hasta));
+    /**
+     * ⏱️ 04/10/2026 — Y LOS 7 DÍAS ANTERIORES, APARTE.
+     *
+     * La oficina factura con fecha anterior a la del pedido. Medido en producción (02-03/10): 116
+     * cargas leyeron SIEMPRE los mismos 12 comprobantes de a uno, 3,7 s cada vez —las facturas de
+     * Famaillá pasadas al 30/09 con pedidos del 01/10—. Se leen en una consulta aparte y no
+     * estirando la de arriba: ésa pasaría los 10 días y dejaría de entrar en el cache de `/ventas`.
+     * Arranca acá, en paralelo con la vista, así que no suma espera. Si falla, se sigue como antes.
+     */
+    const atras = diasAnteriores(desde, DIAS_ATRAS_BUSQUEDA);
+    const ventasAnteriores = atras
+      ? fetchVentas(atras.desde, atras.hasta, { actualizar: refrescar }).catch(() => undefined)
+      : Promise.resolve(undefined);
     // Una sola lectura de cada cabecera en esta petición: las FA fuera del rango las piden tanto
     // el control de vigencia como la actualización de importes.
     const leerCabecera = cabecerasCompartidas();
@@ -1650,7 +1683,14 @@ export async function tableroFacturacion(req: Request & { user?: JwtPayload }, r
     // Acá sí se espera: los dos usos que siguen la necesitan resuelta. Ya está en vuelo desde
     // arriba, así que normalmente no cuesta nada.
     const ventasDelRango = await ventasPendientes;
-    const ventasBusqueda = (await ventasParaBuscar) ?? ventasDelRango;
+    // Sin el listado del rango no hay búsqueda compartida (cada uno vuelve a su camino); los días
+    // anteriores sólo se suman a uno que exista.
+    const listadoRango = (await ventasParaBuscar) ?? ventasDelRango;
+    const anteriores = await ventasAnteriores;
+    // Los rangos no se pisan, pero se une por id igual: una fila repetida haría "ambigua" una búsqueda.
+    const ventasBusqueda = listadoRango && anteriores
+      ? [...new Map([...anteriores, ...listadoRango].map((v: any) => [String(v.id), v])).values()]
+      : listadoRango;
     medir('vista');
     const todos = [...vista.pendientes, ...vista.asignados];
     /**
@@ -1683,7 +1723,7 @@ export async function tableroFacturacion(req: Request & { user?: JwtPayload }, r
       conId,
       // Las facturas del rango que se está mirando salen del listado, sin un GET por cada una.
       // `actualizar`: con Actualizar apretado, la vigencia sale de IM y no de lo guardado.
-      { desde, hasta: hastaBusqueda, ventas: ventasBusqueda, actualizar: refrescar },
+      { desde: anteriores ? atras!.desde : desde, hasta: hastaBusqueda, ventas: ventasBusqueda, actualizar: refrescar },
       leerCabecera,
     ).catch((err: any) => {
       console.warn('[tableroFacturacion] no pude chequear anulados:', err?.message);

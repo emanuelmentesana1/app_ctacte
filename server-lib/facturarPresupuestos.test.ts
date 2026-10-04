@@ -25,6 +25,8 @@ const m = vi.hoisted(() => ({
   emitirRemitoMasivo: vi.fn(),
   rpc: vi.fn(),
   proximoNumeroFactura: vi.fn(),
+  /** Con qué listado se controló la vigencia: el mock de abajo lee igual de a uno. */
+  rangosVigencia: [] as any[],
 }));
 
 vi.mock('./infomanager.js', () => { const fuente = {
@@ -45,6 +47,7 @@ vi.mock('./infomanager.js', () => { const fuente = {
    * simplemente contestando `anulada` / `existe` desde `cabeceraComprobante`.
    */
   comprobantesVigentes: async (ids: Iterable<string | number>, _rango?: any, leerCabecera?: (id: string) => Promise<any>) => {
+    m.rangosVigencia.push(_rango);
     const out = new Map<string, boolean | null>();
     for (const id of ids) {
       // Respeta el lector compartido por petición, igual que el real.
@@ -190,6 +193,43 @@ beforeEach(() => {
  * Lo que se conserva es lo que de verdad protegía: que no se facture algo distinto de lo que se
  * vio. Eso lo daba la huella atada a la aprobación; ahora la manda la pantalla.
  */
+/**
+ * ⏱️ 04/10/2026 — "CERRAR EL CIRCUITO" NO FRENA LA TANDA.
+ *
+ * Medido en producción (332 emisiones desde el 22/09): cada pedido de una tanda tarda una mediana
+ * de 6,9 s, y ~1 s de eso es desconfirmar el presupuesto en IM y marcar el pedido del vendedor,
+ * que no frena nada si falla. Se hacen al final, todos juntos, antes de contestar.
+ */
+describe('cerrar el circuito no frena la tanda', () => {
+  const dos = () => {
+    m.vistaDeRango.mockResolvedValue({ ...VISTA_BASE, pendientes: [presu(), presu({ im_comprobante_id: '11', im_numero: 58051 })] });
+    m.fetchVentasItems.mockResolvedValue([RENGLON, { ...RENGLON, id_comprobante: '11' }, RENGLON_FA]);
+  };
+  it('⏱️ toda la tanda se emite antes de desconfirmar, y se desconfirman todos', async () => {
+    dos();
+    const orden: string[] = [];
+    m.emitirFactura.mockImplementation(async () => { orden.push('FA'); return { ok: true, id: 'f1', numero: 50360, tipo: 'FA B' }; });
+    m.emitirRemito.mockImplementation(async () => { orden.push('RE'); return { ok: true, id: 'r1', numero: 77291, tipo: 'RE' }; });
+    m.desconfirmarPresupuesto.mockImplementation(async (id: string) => { orden.push(`desconfirmar ${id}`); return { ok: true }; });
+    const r = await llamar(facturarSeleccion, { body: { ids: ['10', '11'] } });
+    expect(r.status).toBe(200);
+    expect(r.body.facturados).toBe(2);
+    expect(orden.slice(0, 4)).toEqual(['FA', 'RE', 'FA', 'RE']);
+    expect(orden.slice(4).sort()).toEqual(['desconfirmar 10', 'desconfirmar 11']);
+  });
+  it('si la tanda se corta, lo que ya se facturó igual se desconfirma', async () => {
+    dos();
+    let n = 0;
+    m.emitirFactura.mockImplementation(async () => (++n === 1
+      ? { ok: true, id: 'f1', numero: 50360, tipo: 'FA B' }
+      : { ok: false, error: 'timeout', sinRespuesta: true }));
+    const r = await llamar(facturarSeleccion, { body: { ids: ['10', '11'] } });
+    expect(r.body.cortado).toBeTruthy();
+    expect(m.desconfirmarPresupuesto).toHaveBeenCalledTimes(1);
+    expect(m.desconfirmarPresupuesto).toHaveBeenCalledWith('10');
+  });
+});
+
 describe('qué se puede facturar', () => {
   it('🔑 un presupuesto sin revisar se factura: ya no hace falta aprobar', async () => {
     m.vistaDeRango.mockResolvedValue({ ...VISTA_BASE, pendientes: [presu({ revision: null })] });
@@ -520,7 +560,8 @@ describe('conciliar lo que quedó sin respuesta', () => {
     tablas.presupuestos_facturados = { data: [incierto({ im_factura_id: '58839000', im_factura_numero: 1632 })], error: null };
     m.fetchVentas.mockResolvedValue([remitoEnIM()]);
     await llamar(tableroFacturacion, { method: 'GET' });
-    expect(m.fetchVentas).toHaveBeenCalledTimes(1);
+    // Las dos que hace la pantalla (el rango y los 7 días anteriores); conciliar no suma ninguna.
+    expect(m.fetchVentas).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -548,7 +589,9 @@ describe('el tablero de la etapa 2', () => {
     m.fetchVentas.mockResolvedValue([{id:'20',tipo_comprobante:'FA',cod_cliente:430,cod_empresa:1,total:1073534.08,anulada:'N'}]);
     const r=await llamar(tableroFacturacion,{method:'GET',query:{desde:'2026-09-01',hasta:'2026-09-16'}});
     expect(r.status).toBe(200);
-    expect(m.fetchVentas).toHaveBeenCalledTimes(1);
+    // Una lectura del rango (estirado hacia adelante) y otra de los 7 días anteriores (ver abajo).
+    expect(m.fetchVentas).toHaveBeenCalledTimes(2);
+    expect(m.fetchVentas.mock.calls.map((c: any[]) => c[0]).sort()).toEqual(['2026-08-25', '2026-09-01']);
     // Y lo que se le pasa a la vista es esa misma lectura, sin esperarla antes de entrar.
     const cuarto = m.vistaDeRango.mock.calls[0][3];
     expect(cuarto, 'la vista no recibió el listado compartido').toBeDefined();
@@ -567,7 +610,8 @@ describe('el tablero de la etapa 2', () => {
       .mockResolvedValue([{id:'20',tipo_comprobante:'FA',cod_cliente:430,cod_empresa:1,total:100,anulada:'N'}]);
     const r=await llamar(tableroFacturacion,{method:'GET',query:{desde:'2026-09-01',hasta:'2026-09-16'}});
     expect(r.status).toBe(200);
-    expect(m.fetchVentas).toHaveBeenCalledTimes(2);   // la compartida que falló, y la de importes
+    // La compartida que falló, la de los días anteriores, y la que piden los importes por su cuenta.
+    expect(m.fetchVentas).toHaveBeenCalledTimes(3);
   });
 
   /**
@@ -585,6 +629,33 @@ describe('el tablero de la etapa 2', () => {
     const r=await llamar(tableroFacturacion,{method:'GET'});
     expect(r.status).toBe(200);
     expect(m.cabeceraComprobante).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ⏱️ 04/10/2026 — LA OFICINA FACTURA CON FECHA ANTERIOR AL PEDIDO, Y ESO SE LEÍA DE A UNO.
+   *
+   * Medido en producción (02-03/10): en 116 cargas del tablero se leyeron SIEMPRE los mismos 12
+   * comprobantes de a uno, 3,7 s cada vez (374 s en un día y medio). Eran las facturas de
+   * Famaillá pasadas al 30/09 cuyos pedidos son del 01/10: el listado arrancaba en el día del
+   * pedido. Del 02/10, 20 de 43 comprobantes estaban fechados el 29/09 o el 01/10.
+   *
+   * Los 7 días anteriores se leen APARTE —en paralelo con la vista, y como rango corto entran en
+   * el cache de `/ventas`— en vez de estirar el listado principal, que pasaría los 10 días y
+   * dejaría de cachearse.
+   */
+  it('⏱️ una factura fechada en los 7 días anteriores al rango sale del listado, sin GET de a uno', async () => {
+    tablas.presupuestos_facturados={data:[{im_comprobante_id:'10',im_factura_id:'999',im_factura_numero:51071,cod_cliente:248,cod_empresa:1,total:100,facturado_at:'2026-10-01',estado_emision:'completo'}],error:null};
+    m.fetchVentas.mockImplementation(async (desde: string) => desde < '2026-10-01'
+      ? [{id:'999',tipo_comprobante:'FA',fecha:'2026-09-30',cod_cliente:248,cod_empresa:1,total:100,anulada:'N'}]
+      : []);
+    const r=await llamar(tableroFacturacion,{method:'GET',query:{desde:'2026-10-01',hasta:'2026-10-02'}});
+    expect(r.status).toBe(200);
+    expect(m.fetchVentas.mock.calls.some((c: any[]) => c[0] === '2026-09-24' && c[1] === '2026-09-30')).toBe(true);
+    // El control de vigencia recibe el listado con la FA del 30/09: no tiene que ir a buscarla.
+    // (El mock de comprobantesVigentes de este archivo lee de a uno igual; el real la saca del listado.)
+    const rango = m.rangosVigencia.at(-1);
+    expect(rango.desde).toBe('2026-09-24');
+    expect(rango.ventas.map((v: any) => String(v.id))).toContain('999');
   });
 
   it('🪤 si esa lectura falla, el error llega a los dos y no se repite el GET', async () => {
