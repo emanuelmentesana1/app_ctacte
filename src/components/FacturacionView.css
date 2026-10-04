@@ -204,3 +204,21 @@
 }
 .fc-destrabar button:hover:not(:disabled) { background: #fbe9e7; }
 .fc-destrabar button:disabled { opacity: 0.5; cursor: default; }
+
+/* 🔄 04/10/2026 — Limpieza de avisos. "⋯" (Fecha, Anular, comparar a mano) y "Resolver" (emisión
+   trabada) se abren EN LA MISMA CELDA: la tabla tiene scroll propio y un menú flotante quedaría
+   cortado en las últimas filas. */
+.fc-menu { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; vertical-align: middle; }
+.fc-menu-boton {
+    cursor: pointer; border: 1px solid var(--color-border); border-radius: 6px; padding: 0.1rem 0.5rem;
+    font-size: 0.8rem; color: var(--color-text-muted); background: transparent;
+}
+.fc-menu.abierto .fc-menu-boton { background: var(--color-bg); color: var(--color-text); }
+.fc-menu-lista { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+.fc-menu .fc-destrabar { margin-top: 0; }
+/* Lo que no frena nada en esta pantalla: un ⓘ con el detalle en el title. */
+.fc-info {
+    display: inline-flex; align-items: center; gap: 0.3rem; margin: 0.4rem 0;
+    border: 1px solid var(--color-border); border-radius: 999px; padding: 0.15rem 0.6rem;
+    font-size: 0.8rem; color: var(--color-text-muted); cursor: help;
+}

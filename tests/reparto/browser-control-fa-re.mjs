@@ -6,6 +6,9 @@ import {browser,results,out,rows,reply,setup,assert,test} from './browser-fixtur
  *
  * Se prueba que el resultado se LEE —códigos, las dos cantidades y la hora—, y no sólo que
  * aparezca un cartel: en el celular no hay hover y un `title` no existe.
+ *
+ * 🔄 04/10/2026 (limpieza de avisos): en la fila sólo queda "FA ≠ RE" cuando difieren. Comparar a
+ * mano se pide desde el menú "⋯" de la fila, y el resultado se lee igual en el panel.
  */
 const FILA = (extra = {}) => ({
   ...rows[0], im_factura_id: '501', im_factura_numero: 501, im_factura_tipo: 'FA B',
@@ -17,6 +20,13 @@ const CONTROL = (estado, extra = {}) => ({ estado, texto: estado === 'diferencia
   : 'Los comprobantes son de días que esta pantalla no trajo. Se puede comparar a pedido.',
   diferencias: estado === 'diferencias' ? [{ cod_articulo: 378, factura: 0, remito: 1 }] : [],
   checked_at: '2026-09-11T15:00:00.000Z', ...extra });
+
+/** Abre el menú "⋯" de la fila n y pide la comparación. */
+async function pedirComparacion(page, n = 0) {
+  const menu = page.locator('.fc-facturados .fc-menu').nth(n);
+  await menu.locator('.fc-menu-boton').click();
+  await menu.getByRole('button', { name: /Comparar con el remito/ }).click();
+}
 
 async function tablero(page, control, opciones = {}) {
   await page.route('**/api/facturacion?**', r => reply(r, {
@@ -38,8 +48,8 @@ try {
     const { page, ctx } = await setup(width);
     try {
       await tablero(page, CONTROL('diferencias'));
-      await page.locator('.fc-difieren').waitFor();          // el aviso de la fila, sin hover
-      await page.getByRole('button', { name: /Difieren/ }).click();
+      // El aviso de la fila, sin hover: es el único que queda (04/10/2026).
+      await page.getByRole('button', { name: /FA ≠ RE/ }).click();
       await page.locator('.fc-control').waitFor();
 
       /** ¿Entra entero en la pantalla, sin quedar cortado a izquierda ni a derecha? */
@@ -74,9 +84,12 @@ try {
   await test('Coincidencia y no verificado son discretos: nada en la fila', async () => {
     const { page, ctx } = await setup(1440);
     try {
-      await tablero(page, CONTROL('coinciden'));
-      assert(await page.locator('.fc-difieren').count() === 0, 'Pone un cartel por una coincidencia');
-      await page.getByRole('button', { name: /Coinciden/ }).click();
+      await tablero(page, CONTROL('coinciden'), {
+        comparar: r => reply(r, { ok: true, im_comprobante_id: '101', checked_at: '2026-09-11T15:00:00.000Z', control: CONTROL('coinciden') }),
+      });
+      assert(await page.getByRole('button', { name: /FA ≠ RE|Coinciden|Sin dato|Comparando/ }).count() === 0, 'Pone algo en la fila por una coincidencia');
+      await pedirComparacion(page);
+      await page.locator('.fc-control').waitFor();
       assert((await page.locator('.fc-control').innerText()).includes('cantidades registradas'), 'No se lee el resultado');
     } finally { await ctx.close(); }
   });
@@ -97,10 +110,9 @@ try {
       await page.locator('.of-tabs').getByRole('button', { name: 'Facturación', exact: true }).click();
       await page.locator('.fc-facturados summary').click();
 
-      const botones = page.getByRole('button', { name: /Comparar|Comparando|Sin dato/ });
-      await botones.nth(0).click();
+      await pedirComparacion(page, 0);
       await page.getByRole('button', { name: /Comparando/ }).waitFor();
-      await botones.nth(1).click();                       // aborta la primera
+      await pedirComparacion(page, 1);                    // aborta la primera
       await page.locator('.fc-control').waitFor();
       soltar();
       // El primero tiene que volver a estar disponible, no clavado en "Comparando…".
@@ -116,7 +128,7 @@ try {
       await tablero(page, CONTROL('no_verificado'), {
         comparar: r => reply(r, { ok: true, im_comprobante_id: '999', checked_at: '2026-09-11T15:00:00.000Z', control: CONTROL('coinciden') }),
       });
-      await page.getByRole('button', { name: /Sin dato|Comparar/ }).click();
+      await pedirComparacion(page);
       await page.locator('.fc-control').waitFor();
       const texto = await page.locator('.fc-control').innerText();
       assert(/cambiaron|no se pudo/i.test(texto), `No avisa del descarte: "${texto}"`);
@@ -131,7 +143,7 @@ try {
       await tablero(page, CONTROL('no_verificado'), {
         comparar: r => reply(r, { ok: true, im_comprobante_id: '101', checked_at: '2026-09-11T15:00:00.000Z', control: CONTROL('coinciden') }),
       });
-      await page.getByRole('button', { name: /Sin dato|Comparar/ }).click();
+      await pedirComparacion(page);
       await page.locator('.fc-control').waitFor();
       await page.locator('.fc-corregir').first().click();
       assert(await page.locator('.fc-control').count() === 0, 'Conserva el resultado viejo al abrir la corrección');
@@ -156,7 +168,7 @@ try {
     });
     await page.locator('.of-tabs').getByRole('button', { name: 'Facturación', exact: true }).click();
     await page.locator('.fc-facturados summary').click();
-    await page.getByRole('button', { name: /Sin dato|Comparar/ }).first().click();
+    await pedirComparacion(page);
     await page.getByRole('button', { name: /Comparando/ }).waitFor();
     return { page, ctx, soltar };
   }
@@ -217,7 +229,7 @@ try {
       await page.route('**/api/facturacion?**', r => reply(r, { pendientes: [], facturados: muchas, totales: { pendientes: 0, facturados: 40, con_diferencias: 1 } }));
       await page.locator('.of-tabs').getByRole('button', { name: 'Facturación', exact: true }).click();
       await page.locator('.fc-facturados summary').click();
-      await page.getByRole('button', { name: /Difieren/ }).first().click();
+      await page.getByRole('button', { name: /FA ≠ RE/ }).first().click();
       await page.locator('.fc-control').waitFor();
       await page.waitForTimeout(600);   // el scroll es suave
       const v = await page.evaluate(() => {

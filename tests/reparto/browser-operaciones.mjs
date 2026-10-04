@@ -185,7 +185,7 @@ try {
       await invoice(page);let sent,calls=0;
       const gate=new Promise(r=>release=r);
       await page.route('**/api/facturacion/501/fecha',async r=>{calls++;sent=r.request().postDataJSON();await gate;await reply(r,{ok:true,fecha:sent.fecha,remito:{numero:900},avisos:[]}).catch(()=>{});});
-      await page.getByRole('button',{name:'Fecha',exact:true}).click();
+      await page.locator('.fc-facturados .fc-menu-boton').first().click();await page.getByRole('button',{name:'Fecha',exact:true}).click();
       await page.locator('.mf-campo input').fill('2026-09-11');
       await page.getByRole('button',{name:'Cambiar la fecha',exact:true}).click();
       await until(()=>!!sent);

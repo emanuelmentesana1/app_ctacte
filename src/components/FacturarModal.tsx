@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 /** Hoy en Argentina (UTC-3 fija), que es con lo que trabaja la oficina. */
 const hoyISO = () => new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
 import { createPortal } from 'react-dom';
-import { X, AlertTriangle, Loader2, Receipt, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { X, AlertTriangle, Loader2, Receipt, CheckCircle2, ShieldAlert, Info } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import './FacturarModal.css';
 
@@ -214,13 +214,11 @@ export function FacturarModal(
                 {/* ─── Antes de emitir: exactamente qué va a salir ─────────────── */}
                 {previa && !resultado && (
                     <>
-                        <div className="fac-alerta grave">
+                        {/* 🔄 04/10/2026: en una línea. El detalle sigue a un toque, en el title. */}
+                        <div className="fac-alerta grave"
+                             title="Consume numeración fiscal, entra en la cuenta corriente del cliente y el remito descuenta stock. Para deshacerlo hay que anular en InfoManager.">
                             <ShieldAlert size={18} />
-                            <span>
-                                Esto emite comprobantes <b>reales</b> en InfoManager: consume numeración fiscal,
-                                entra en la cuenta corriente del cliente y el remito descuenta stock.
-                                <b> No se puede deshacer desde acá</b> (se anula en IM).
-                            </span>
+                            <span>Emite comprobantes <b>reales</b> en InfoManager. <b>No se deshace desde acá.</b></span>
                         </div>
 
                         <div className="fac-resumen">
@@ -240,7 +238,7 @@ export function FacturarModal(
                             {fechaEmision !== hoyISO() && (
                                 <span className="fac-fecha-aviso">no es hoy</span>
                             )}
-                            <small>Fecha máxima permitida: {previa.fecha_maxima_emision} ({previa.max_adelanto_dias} días de adelanto).</small>
+                            <span className="fac-ayuda" title={`Fecha máxima permitida: ${previa.fecha_maxima_emision} (${previa.max_adelanto_dias} días de adelanto).`}><Info size={13} /></span>
                         </label>
 
                         <table className="fac-tabla">
@@ -272,13 +270,13 @@ export function FacturarModal(
                             </tbody>
                         </table>
 
+                        {/* 🔄 04/10/2026: plegado. No frena la emisión y lo tiene que corregir el depósito
+                            (el detalle está en Presupuestos › Informes › Sin stock). */}
                         {!!enNegativo.length && (
-                            <div className="fac-alerta suave">
-                                <AlertTriangle size={16} />
+                            <details className="fac-negativo">
+                                <summary><Info size={14} /> {enNegativo.length} pedido(s) dejan stock en negativo: se facturan igual</summary>
                                 <div>
-                                    <b>{enNegativo.length} pedido(s) van a dejar stock en negativo.</b> Se
-                                    facturan y se remiten igual — el depósito tiene diferencias de inventario y
-                                    la mercadería sale lo mismo. Conviene corregirlo en InfoManager:
+                                    El depósito tiene diferencias de inventario y la mercadería sale lo mismo. Conviene corregirlo en InfoManager:
                                     <ul>
                                         {enNegativo.slice(0, 6).map(p => (
                                             <li key={p.im_comprobante_id}>
@@ -289,7 +287,7 @@ export function FacturarModal(
                                         {enNegativo.length > 6 && <li>…y {enNegativo.length - 6} más</li>}
                                     </ul>
                                 </div>
-                            </div>
+                            </details>
                         )}
 
                         {!!noSePuede.length && (
@@ -314,13 +312,11 @@ export function FacturarModal(
                             </div>
                         )}
 
-                        <p className="fac-nota">
-                            Se emite <b>de a un pedido por vez</b>. Si InfoManager deja de contestar, se frena
-                            ahí mismo y el resto no se emite: no se sabe si esa factura salió y reintentar podría
-                            facturarle dos veces al mismo cliente. Al terminar vas a ver qué se emitió y dónde se cortó.
-                        </p>
-
                         <div className="fac-acciones">
+                            {/* 🔄 04/10/2026: era un párrafo fijo; ahora es un ⓘ. */}
+                            <span className="fac-ayuda fac-como" title="Se emite de a un pedido por vez. Si InfoManager deja de contestar, se frena ahí mismo y el resto no se emite: no se sabe si esa factura salió y reintentar podría facturarle dos veces al mismo cliente. Al terminar vas a ver qué se emitió y dónde se cortó.">
+                                <Info size={13} /> cómo se emite
+                            </span>
                             <button className="fac-btn ghost" onClick={cerrar} disabled={emitiendo}>
                                 {intentado ? 'Cerrar y revisar' : 'Cancelar'}
                             </button>

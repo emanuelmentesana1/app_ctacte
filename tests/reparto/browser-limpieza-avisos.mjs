@@ -118,6 +118,113 @@ try {
       assert(/proporción/.test(await page.locator('th', { hasText: 'Sugerido' }).getAttribute('title') ?? ''), 'La ayuda de "sugerido" no está en el ⓘ');
     } finally { await ctx.close(); }
   });
+  // ─── Facturación ──────────────────────────────────────────────────────────────────────────
+  const FACTURADA = (extra = {}) => ({ ...row('101', 'CLIENTE ALFA'), im_factura_id: '501', im_factura_numero: 51031, im_factura_tipo: 'FA B',
+    im_remito_id: '601', im_remito_numero: 78304, facturado_at: '2026-09-29', notas: [], ...extra });
+  const control = estado => ({ estado, texto: estado === 'coinciden' ? 'Coinciden las cantidades.' : 'Sin dato.', diferencias: [], checked_at: '2026-09-11T15:00:00.000Z' });
+  const tablero = (p, cuerpo) => p.route('**/api/facturacion?**', r => reply(r, { pendientes: [], facturados: [], totales: { pendientes: 0, facturados: 0 }, ...cuerpo }));
+  const aFacturacion = async page => {
+    await page.locator('.of-tabs').getByRole('button', { name: 'Facturación', exact: true }).click();
+  };
+
+  await test('Facturación: un pendiente sin problema no dice "listo"; una falta sí se ve; los frenados van a un ⓘ', async () => {
+    const { page, ctx } = await setup(1440, { beforeGoto: p => tablero(p, {
+      pendientes: [row('101', 'CLIENTE ALFA'), { ...row('102', 'CLIENTE BETA'), falta_remito: true, im_factura_numero: 50900 }],
+      totales: { pendientes: 2, facturados: 0 }, observados: 2,
+    }) });
+    try {
+      await aFacturacion(page);
+      const filas = page.locator('.fc-tabla tbody tr');
+      await filas.nth(1).waitFor();
+      assert(await filas.nth(0).locator('.fc-badge').count() === 0, 'Sigue el badge "listo"');
+      assert(/falta el remito/.test(await filas.nth(1).locator('.fc-badge').innerText()), 'Se perdió el aviso de la falta de remito');
+      assert(/2 frenados en Presupuestos/.test(await page.locator('.fc-info').innerText()), 'Los frenados no quedaron en el ⓘ');
+      assert(await page.locator('p.fc-nota', { hasText: 'con un problema marcado' }).count() === 0, 'Sigue la nota fija de los frenados');
+    } finally { await ctx.close(); }
+  });
+
+  await test('Emisión trabada: el badge queda y las salidas van a "Resolver"', async () => {
+    const trabada = { ...row('101', 'CLIENTE ALFA'), estado_emision: 'incierto', im_factura_numero: 50900, im_remito_numero: null, facturado_at: null };
+    const { page, ctx } = await setup(1440, { beforeGoto: p => tablero(p, { pendientes: [trabada], totales: { pendientes: 1, facturados: 0 } }) });
+    try {
+      await aFacturacion(page);
+      const fila = page.locator('.fc-tabla tbody tr').first();
+      await fila.locator('.fc-badge.grave', { hasText: 'emisión por verificar' }).waitFor();
+      assert(!(await fila.getByRole('button', { name: 'Ya lo hice en IM' }).isVisible()), 'Las salidas siguen a la vista');
+      await fila.locator('.fc-menu-boton', { hasText: 'Resolver' }).click();
+      assert(await fila.getByRole('button', { name: 'Ya lo hice en IM' }).isVisible(), 'El menú "Resolver" no muestra las salidas');
+      assert(await fila.getByRole('button', { name: 'No está en IM' }).isVisible(), 'Falta "No está en IM" en el menú');
+    } finally { await ctx.close(); }
+  });
+
+  await test('🔴 Facturadas: ni "Coinciden" ni "Sin dato" ni "Anular" a la vista; están en "⋯"', async () => {
+    const { page, ctx } = await setup(1440, { beforeGoto: p => tablero(p, {
+      facturados: [FACTURADA({ control_fa_re: control('coinciden') }), FACTURADA({ im_comprobante_id: '102', cliente_nombre: 'CLIENTE BETA', control_fa_re: control('no_verificado') })],
+      totales: { pendientes: 0, facturados: 2 },
+    }) });
+    try {
+      await aFacturacion(page);
+      await page.locator('.fc-facturados summary').first().click();
+      const filas = page.locator('.fc-facturados tbody tr');
+      await filas.nth(1).waitFor();
+      assert(await page.getByRole('button', { name: /Coinciden|Sin dato/ }).count() === 0, 'Siguen los botones de comparar en cada fila');
+      assert(!(await filas.nth(0).locator('.fc-anular').isVisible()), '"Anular" sigue a la vista en cada fila');
+      assert(!(await filas.nth(0).locator('.fc-fecha').isVisible()), '"Fecha" sigue a la vista en cada fila');
+      await filas.nth(0).locator('.fc-menu-boton').click();
+      for (const accion of ['Comparar con el remito', 'Fecha', 'Anular']) {
+        assert(await filas.nth(0).getByRole('button', { name: new RegExp(accion) }).isVisible(), `El menú no tiene "${accion}"`);
+      }
+    } finally { await ctx.close(); }
+  });
+
+  await test('Facturar: el cartel rojo en una línea; la fecha máxima y "cómo se emite" a un ⓘ; el stock negativo plegado', async () => {
+    const previa = { fecha_maxima_emision: '2026-09-30', max_adelanto_dias: 7, punto_de_venta: 777, no_se_puede: 0, ya_facturados: 0,
+      pedidos: [{ ...row('101', 'CLIENTE ALFA'), estado: 'listo', letra: 'B', renglones: 1, sin_stock: [{ cod_articulo: 5, descripcion: 'SORGO', pedido: 10, disponible: 2 }] }],
+      a_emitir: { facturas: 1, remitos: 1, clientes: 1, total: 150000, letras: { A: 0, B: 1 } } };
+    const { page, ctx } = await setup(1440, { beforeGoto: async p => {
+      await tablero(p, { pendientes: [row('101', 'CLIENTE ALFA')], totales: { pendientes: 1, facturados: 0 } });
+      await p.route('**/api/facturacion/previa?**', r => reply(r, previa));
+    } });
+    try {
+      await aFacturacion(page);
+      await page.locator('.fc-tabla tbody input[type=checkbox]').first().check();
+      await page.getByRole('button', { name: 'Facturar 1', exact: true }).click();
+      const grave = page.locator('.fac-alerta.grave');
+      await grave.waitFor();
+      const texto = (await grave.innerText()).trim();
+      assert(/No se deshace desde acá/.test(texto) && texto.length < 90, `El cartel rojo no es de una línea: "${texto}"`);
+      const modal = await page.locator('.fac-modal').innerText();
+      assert(!/de a un pedido por vez/.test(modal), 'El párrafo de cómo se emite sigue fijo');
+      assert(!/Fecha máxima permitida/.test(modal), 'La fecha máxima sigue fija');
+      assert(/Fecha máxima permitida: 2026-09-30/.test(await page.locator('.fac-ayuda').first().getAttribute('title') ?? ''), 'La fecha máxima no quedó en el ⓘ');
+      const negativo = page.locator('details.fac-negativo');
+      assert(await negativo.count() === 1 && await negativo.getAttribute('open') === null, 'El stock negativo no quedó plegado');
+      assert(/stock en negativo/.test(await negativo.locator('summary').innerText()), 'El resumen del stock negativo no dice qué pasa');
+    } finally { await ctx.close(); }
+  });
+
+  await test('Editar factura: la explicación es una línea, con el detalle en el ⓘ', async () => {
+    const factura = { factura: { id: '501', numero: 51031, letra: 'B', cliente_nombre: 'CLIENTE ALFA', fecha: '2026-09-29' },
+      version: 0, operacion: null, bloqueo_productos: null, sin_articulo: [],
+      renglones: [{ cod_articulo: 650, descripcion: 'MANI C/ CHOCOLATE', cantidad: 12, precio: 9936, descuento_porc: 0, cod_lista_precios: 12 }] };
+    const { page, ctx } = await setup(1440, { beforeGoto: async p => {
+      await tablero(p, { facturados: [FACTURADA()], totales: { pendientes: 0, facturados: 1 } });
+      await p.route('**/api/facturacion/corregir/501', r => reply(r, factura));
+      await p.route('**/api/facturacion/editar', r => reply(r, { previsualizacion: { rehace_factura: false,
+        factura: { numero: 51031, tipo: 'FA B', total_actual: 119232, total_nuevo: 119232 },
+        remito: { numero: 78304, total_actual: 119232, total_nuevo: 119232 }, vuelve: [], sale: [], hoja: null } }));
+    } });
+    try {
+      await aFacturacion(page);
+      await page.locator('.fc-facturados summary').first().click();
+      await page.getByRole('button', { name: 'Editar', exact: true }).click();
+      const sub = page.locator('.cf-sub').first();
+      await sub.waitFor();
+      assert(/Si cambia/.test(await sub.innerText()), `La línea no explica qué pasa: "${await sub.innerText()}"`);
+      assert(/Dejá la factura como tiene que quedar/.test(await sub.getAttribute('title') ?? ''), 'El detalle no quedó en el ⓘ');
+      assert(!/Dejá la factura como tiene que quedar/.test(await page.locator('.cf-modal').innerText()), 'El recuadro de ayuda sigue fijo');
+    } finally { await ctx.close(); }
+  });
 } finally {
   await browser.close();
   await fs.writeFile(out + '/browser-limpieza-avisos.json', JSON.stringify(results, null, 2));

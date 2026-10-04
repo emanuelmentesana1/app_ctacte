@@ -136,3 +136,8 @@
 /* "Devolver todo": arriba de la tabla, a la derecha, chico. Es un atajo, no la acción principal. */
 .cf-herramientas { display: flex; justify-content: flex-end; margin: 0.4rem 0 0.3rem; }
 .cf-devolver-todo { font-size: 0.8rem; padding: 0.3rem 0.8rem; }
+
+/* 🔄 04/10/2026 — Limpieza de avisos: la explicación de cada solapa en una línea corta, sin
+   recuadro; el texto completo queda en el title del ⓘ. */
+.cf-sub { display: flex; align-items: center; gap: 0.35rem; margin: 0.25rem 0 0.6rem; font-size: 0.82rem; color: var(--color-text-muted, #6b5b45); cursor: help; }
+.cf-sub svg { flex-shrink: 0; }

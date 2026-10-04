@@ -3,7 +3,7 @@ import { useLecturaVigente } from '../utils/useLecturaVigente';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     AlertTriangle, Loader2, RefreshCw, Receipt, CheckCircle2, X, FileWarning, Printer, Pencil, Search, CalendarDays,
-    DollarSign, Scale, Share2,
+    DollarSign, Scale, Share2, Info,
 } from 'lucide-react';
 import { authHeaders, getToken, getUser } from '../utils/auth';
 import { FronteraSesion } from '../utils/fronteraSesion';
@@ -81,6 +81,24 @@ const ajusteNotas = (notas?: Array<{ tipo: string; total: number }>) =>
 const money = (n: number) => '$' + Math.round(n).toLocaleString('es-AR');
 const dia = (f: string | null) => (f ? `${f.slice(8, 10)}/${f.slice(5, 7)}` : '—');
 const requiereConciliar = (p: Fila) => ['anulado', 'incierto', 'factura_emitiendo', 'remito_emitiendo'].includes(p.estado_emision ?? '');
+
+/**
+ * Menú de una fila ("⋯" o "Resolver"): las acciones aparecen al lado, en la misma celda, sólo
+ * cuando se piden (04/10/2026). Va en la misma celda porque la tabla tiene scroll propio y un
+ * menú flotante quedaría cortado; y es un botón, no un <details>, para no anidar un <summary>
+ * dentro de "ya facturados".
+ */
+function MenuFila({ etiqueta, titulo, children }: { etiqueta: string; titulo?: string; children: React.ReactNode }) {
+    const [abierto, setAbierto] = useState(false);
+    return (
+        <span className={'fc-menu' + (abierto ? ' abierto' : '')}
+              onClick={e => { if ((e.target as HTMLElement).closest('.fc-menu-lista button')) setAbierto(false); }}>
+            <button type="button" className="fc-menu-boton" aria-expanded={abierto} aria-label={titulo ?? etiqueta} title={titulo}
+                    onClick={() => setAbierto(v => !v)}>{etiqueta}</button>
+            {abierto && <span className="fc-menu-lista">{children}</span>}
+        </span>
+    );
+}
 
 export function FacturacionView({ desde, hasta }: { desde: string; hasta: string }) {
     const [pendientes, setPendientes] = useState<Fila[]>([]);
@@ -461,8 +479,11 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
             })()}
 
             {/* Lo marcado con un problema no se factura: se dice, para que no parezca que se perdió. */}
+            {/* 🔄 04/10/2026: era una línea fija más; ahora es un ⓘ (no frena nada en esta pantalla). */}
             {observados > 0 && (
-                <p className="fc-nota"><b>{observados}</b> con un problema marcado · No se facturan hasta resolverlos en Presupuestos.</p>
+                <span className="fc-info" title="Los pedidos con un problema marcado no se facturan hasta resolverlos en Presupuestos.">
+                    <Info size={13} /> {observados} frenados en Presupuestos
+                </span>
             )}
             {error && <div className="fc-aviso error"><AlertTriangle size={15} /><span>{error}</span></div>}
 
@@ -508,6 +529,9 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                                     {requiereConciliar(p)
                                         ? <>
                                             <span className="fc-badge grave">{p.estado_emision === 'anulado' ? 'factura anulada · requiere conciliación' : 'emisión por verificar'}</span>
+                                            {/* 🔄 04/10/2026: las salidas van a un menú "Resolver"; la fila muestra el badge. */}
+                                            {(remitoColgado(p) || facturaAnuladaConRemito(p)) && (
+                                            <MenuFila etiqueta="Resolver">
                                             {remitoColgado(p) && (
                                                 <span className="fc-destrabar">
                                                     <button disabled={destrabando === p.im_comprobante_id}
@@ -536,12 +560,14 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                                                     </button>
                                                 </span>
                                             )}
+                                            </MenuFila>
+                                            )}
                                         </>
                                         : p.falta_remito
                                         ? <span className="fc-badge grave">falta el remito (FA {p.im_factura_numero})</span>
                                         : p.falta_factura
                                         ? <span className="fc-badge grave">falta la factura (RE {p.im_remito_numero})</span>
-                                        : <span className="fc-badge">listo</span>}
+                                        : null /* 🔄 04/10/2026: sin "listo": es lo normal y no avisa nada. */}
                                 </td>
                                 {/* 🔑 Imprimir desde acá también: el circuito entero tiene que poder
                                     sacar el papel sin volver a Presupuestos (Mati, 09/09/2026). */}
@@ -625,25 +651,21 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                                           * celular no hay hover. El botón abre un detalle con los
                                           * códigos, las dos cantidades y a qué hora se miró.
                                           */}
+                                        {/* 🔄 04/10/2026: comparar con el remito sólo se ve cuando DIFIEREN (o mientras
+                                            compara). "Coinciden" y "Sin dato" en las 43 filas del día eran ruido: pedirlo a
+                                            mano quedó en el menú "⋯", y el resultado se lee igual en el panel de abajo. */}
                                         {p.im_factura_id && p.im_remito_id && (() => {
                                             const c = controlDe(p);
+                                            if (!(c === 'cargando' || (c && c.estado === 'diferencias'))) return null;
                                             const abierto = detalleControl === p.im_comprobante_id;
-                                            const rotulo = c === 'cargando' ? ' Comparando…'
-                                                : !c ? ' Comparar'
-                                                : c.estado === 'coinciden' ? ' Coinciden'
-                                                : c.estado === 'diferencias' ? ' Difieren' : ' Sin dato';
                                             return (
-                                                <button className={'fc-imprimir fc-comparar' + (c && c !== 'cargando' ? ` e-${c.estado}` : '')}
+                                                <button className={'fc-imprimir fc-comparar' + (c !== 'cargando' ? ' e-diferencias' : '')}
                                                         aria-expanded={abierto}
                                                         disabled={c === 'cargando'}
-                                                        onClick={() => {
-                                                            if (abierto) { setDetalleControl(null); return; }
-                                                            // Si el tablero ya lo verificó, sólo se abre; si no, se pide.
-                                                            if (c && c !== 'cargando' && c.estado !== 'no_verificado') setDetalleControl(p.im_comprobante_id);
-                                                            else void compararPar(p);
-                                                        }}>
+                                                        title={c !== 'cargando' ? c.texto : undefined}
+                                                        onClick={() => setDetalleControl(abierto ? null : p.im_comprobante_id)}>
                                                     {c === 'cargando' ? <Loader2 size={13} className="spin" /> : <Scale size={13} />}
-                                                    {rotulo}
+                                                    {c === 'cargando' ? ' Comparando…' : ' FA ≠ RE'}
                                                 </button>
                                             );
                                         })()}
@@ -668,30 +690,33 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                                                 </button>
                                             </>
                                         )}
+                                        {/* 🔄 04/10/2026: Fecha y Anular (y comparar a mano) a un menú "⋯". Estaban en cada
+                                            fila —43 botones "Anular" en rojo el 02/10— y se usan poco. Se abre en la misma
+                                            celda: la tabla tiene scroll propio y un menú flotante quedaría cortado. */}
                                         {p.im_factura_id && (
-                                            <button className="fc-imprimir fc-fecha"
-                                                    title="Cambiar la fecha de la factura y su remito"
-                                                    onClick={() => { olvidarComparados(); setMoviendoFecha(String(p.im_factura_id)); }}>
-                                                <CalendarDays size={14} /> Fecha
-                                            </button>
-                                        )}
-                                        {p.im_factura_id && p.im_remito_id && (
-                                            <button className="fc-imprimir fc-anular"
-                                                    disabled={destrabando === p.im_comprobante_id || !!p.notas?.length}
-                                                    title={p.notas?.length
-                                                        ? 'Tiene notas de crédito o débito: anularla las dejaría colgando'
-                                                        : 'Anular la factura y su remito en InfoManager. La mercadería vuelve al stock.'}
-                                                    onClick={() => { olvidarComparados(); anularFactura(p); }}>
-                                                {destrabando === p.im_comprobante_id ? <Loader2 size={14} className="spin" /> : <X size={14} />} Anular
-                                            </button>
-                                        )}
-                                        {/* 🔑 Diferencia CONFIRMADA entre la factura y el remito: se ve
-                                            acá. Las coincidencias y lo no verificado quedan en el botón,
-                                            para no sumar un cartel por fila. */}
-                                        {p.control_fa_re?.estado === 'diferencias' && (
-                                            <span className="fc-chip grave fc-difieren" title={p.control_fa_re.texto}>
-                                                <Scale size={12} /> FA ≠ RE
-                                            </span>
+                                            <MenuFila etiqueta="⋯" titulo="Más acciones">
+                                                {p.im_remito_id && (
+                                                    <button className="fc-imprimir" title="Comparar los productos de la factura con los del remito"
+                                                            onClick={() => { void compararPar(p); }}>
+                                                        <Scale size={14} /> Comparar con el remito
+                                                    </button>
+                                                )}
+                                                <button className="fc-imprimir fc-fecha"
+                                                        title="Cambiar la fecha de la factura y su remito"
+                                                        onClick={() => { olvidarComparados(); setMoviendoFecha(String(p.im_factura_id)); }}>
+                                                    <CalendarDays size={14} /> Fecha
+                                                </button>
+                                                {p.im_remito_id && (
+                                                    <button className="fc-imprimir fc-anular"
+                                                            disabled={destrabando === p.im_comprobante_id || !!p.notas?.length}
+                                                            title={p.notas?.length
+                                                                ? 'Tiene notas de crédito o débito: anularla las dejaría colgando'
+                                                                : 'Anular la factura y su remito en InfoManager. La mercadería vuelve al stock.'}
+                                                            onClick={() => { olvidarComparados(); anularFactura(p); }}>
+                                                        {destrabando === p.im_comprobante_id ? <Loader2 size={14} className="spin" /> : <X size={14} />} Anular
+                                                    </button>
+                                                )}
+                                            </MenuFila>
                                         )}
                                         {/* 🔑 Cada nota se ve y se imprime desde acá. Mati (10/09/2026):
                                             *"tiene que aparecer en el panel para poder verla y también

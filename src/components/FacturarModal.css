@@ -111,3 +111,12 @@
  */
 .fac-registrar { display: inline-flex; align-items: center; gap: 0.35rem; margin-top: 0.35rem;
     padding: 0.3rem 0.6rem; font-size: 0.8rem; color: var(--color-text); }
+
+/* 🔄 04/10/2026 — Limpieza de avisos: lo informativo, a un ⓘ con el detalle en el title. */
+.fac-ayuda { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--color-text-muted, #6b5b45); cursor: help; font-size: 0.8rem; }
+.fac-acciones .fac-como { margin-right: auto; }
+/* Stock en negativo: no frena la emisión y lo corrige el depósito. Plegado, se abre si hace falta. */
+.fac-negativo { border: 1px solid var(--color-border, #d8c9b2); border-radius: 8px; padding: 0.35rem 0.6rem; font-size: 0.82rem; color: var(--color-text-muted, #6b5b45); }
+.fac-negativo > summary { cursor: pointer; display: flex; align-items: center; gap: 0.35rem; list-style: none; }
+.fac-negativo > summary::-webkit-details-marker { display: none; }
+.fac-negativo ul { margin: 0.35rem 0 0 1rem; padding: 0; }

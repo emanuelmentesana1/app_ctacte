@@ -46,9 +46,12 @@ try {
    await page.locator('.of-tabs button').filter({hasText:'Facturación'}).click();
    await page.locator('.fc-facturados summary').click();
    const filas=page.locator('.fc-facturados tbody tr');
+   // 🔄 04/10/2026 (limpieza de avisos): "Anular" está en el menú "⋯" de la fila.
+   await filas.nth(1).locator('.fc-menu-boton').click();
    assert(await filas.nth(1).locator('.fc-anular').isDisabled(),'Deja anular una factura con notas');
    let texto='';
    page.once('dialog',async d=>{texto=d.message();await d.accept('el cliente rechazó el pedido');});
+   await filas.nth(0).locator('.fc-menu-boton').click();
    await filas.nth(0).locator('.fc-anular').click();
    await until(()=>!!enviado);
    assert(/vuelve al stock/i.test(texto),`El aviso no dice que vuelve la mercadería: "${texto.slice(0,120)}"`);

@@ -1,7 +1,7 @@
 import { useOperacionReparto } from './RepartoContext';
 import { useDialogoReparto, estiloDialogo } from '../utils/useDialogoReparto';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X, AlertTriangle, Trash2, Plus, Loader2, CheckCircle2 } from 'lucide-react';
+import { X, AlertTriangle, Trash2, Plus, Loader2, CheckCircle2, Info } from 'lucide-react';
 import { authHeaders, getUser } from '../utils/auth';
 import { aplicarPrecioDeLista } from '../utils/precioDeLista';
 import './CorregirFacturaModal.css';
@@ -519,12 +519,11 @@ export function CorregirFacturaModal(
             {modo === 'financiera' ? (
               <div className="cf-financiera">
                 {/* 🔑 No saca mercadería: es plata. Diferencia de cambio, intereses, bonificación. */}
-                <p className="cf-nota">
-                  Para lo que no saca mercadería: una diferencia de cambio, intereses, una
-                  bonificación. Va contra la factura {factura.numero}, así que la hoja de ruta
-                  {/* 🪤 Decía "lo descuenta" siempre, y una ND SUMA: el texto afirmaba lo
-                      contrario de lo que iba a pasar con la mitad de las notas. */}
-                  {finTipo === 'ND' ? ' lo suma al pedido.' : ' lo descuenta del pedido.'}
+                {/* 🔄 04/10/2026: una línea; el detalle, en el ⓘ.
+                    🪤 Decía "lo descuenta" siempre, y una ND SUMA: el texto afirmaba lo contrario de lo
+                    que iba a pasar con la mitad de las notas. */}
+                <p className="cf-sub" title={`Para lo que no saca mercadería: una diferencia de cambio, intereses, una bonificación. Va contra la factura ${factura.numero}, así que la hoja de ruta ${finTipo === 'ND' ? 'lo suma al pedido' : 'lo descuenta del pedido'}.`}>
+                  <Info size={13} /> No saca mercadería: la hoja de ruta {finTipo === 'ND' ? 'lo suma al pedido' : 'lo descuenta del pedido'}.
                 </p>
                 <div className="cf-fila-fin">
                   <label>
@@ -564,16 +563,15 @@ export function CorregirFacturaModal(
               </div>
             ) : (
             <>
+            {/* 🔄 04/10/2026: era un recuadro fijo; ahora una línea corta con el detalle en el ⓘ. */}
             {modo === 'editar' ? (
-              <p className="cf-nota">
-                Dejá la factura como tiene que quedar y guardá. Si cambia, la app la reemplaza por una
-                nueva con la misma fecha, y el remito, el stock y la hoja de ruta se acomodan solos.
+              <p className="cf-sub" title="Dejá la factura como tiene que quedar y guardá. Si cambia, la app la reemplaza por una nueva con la misma fecha, y el remito, el stock y la hoja de ruta se acomodan solos.">
+                <Info size={13} /> Si cambia, la app la reemplaza por una nueva con la misma fecha.
               </p>
             ) : (
-              /* 🪤 La factura no se modifica. Que se lea antes de tocar nada. */
-              <p className="cf-nota">
-                La factura {factura.numero} no se toca: es un comprobante fiscal. Dejá los renglones
-                como tendrían que haber quedado y abajo vas a ver qué notas salen.
+              /* 🪤 La factura no se modifica. Que se lea antes de tocar nada: queda a la vista, corto. */
+              <p className="cf-sub" title={`La factura ${factura.numero} no se toca: es un comprobante fiscal. Dejá los renglones como tendrían que haber quedado y abajo vas a ver qué notas salen.`}>
+                <Info size={13} /> La factura {factura.numero} no se toca: salen notas.
               </p>
             )}
 
