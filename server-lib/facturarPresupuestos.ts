@@ -44,7 +44,7 @@ import {
 } from './infomanager.js';
 import { buscarFacturasYaEmitidas, facturasCandidatas } from './facturaYaEmitida.js';
 import { facturasEmitidasPorLaApp } from './facturasDeLaApp.js';
-import { emitirFactura, emitirRemito, emitirRemitoMasivo, letraDeFactura, proximoNumeroFactura,
+import { emitirFactura, emitirRemito, emitirRemitoMasivo, letraDeFactura, proximoNumeroFactura, DIAS_BUSQUEDA_RESPALDO,
   claveDeSerie, ID_DESTINO as ID_DESTINO_FACTURA, type SerieComprobante, marcaDeFactura } from './facturarIM.js';
 import type { DatosComprobante } from './facturarIM.js';
 import { usuarioIM } from './pedidos.js';
@@ -1242,7 +1242,7 @@ export async function facturarSeleccion(req: Request & { user?: JwtPayload }, re
       const serie = serieDe(p);
       const clave = claveDeSerie(serie, 'FA', p.letra, PV_FACTURA);
       if (numeros.has(clave)) continue;
-      numeros.set(clave, await proximoNumeroFactura(p.letra, PV_FACTURA, 30, 'FA', serie));
+      numeros.set(clave, await proximoNumeroFactura(p.letra, PV_FACTURA, DIAS_BUSQUEDA_RESPALDO, 'FA', serie));
     }
 
     empezoAEmitir = true;

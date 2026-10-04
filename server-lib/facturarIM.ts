@@ -371,7 +371,7 @@ export async function emitirFactura(d: DatosComprobante): Promise<ResultadoEmisi
   if (!objetivoValido(serieFa, PTO_VENTA_FACTURA, letra, 'FA')) {
     return { ok: false, error: 'No se puede determinar el talonario de la factura (empresa, destino o punto de venta ilegibles).', raw: null };
   }
-  let numero = d.numero ?? await proximoNumeroFactura(letra, PTO_VENTA_FACTURA, 30, 'FA', serieFa);
+  let numero = d.numero ?? await proximoNumeroFactura(letra, PTO_VENTA_FACTURA, DIAS_BUSQUEDA_RESPALDO, 'FA', serieFa);
   if (numero == null) {
     // 🪤 `null` cubre dos casos —sin comprobantes en la ventana, o filas que no se pudieron
     // identificar—, así que el mensaje no puede afirmar cuál fue ni prometer una salida.
@@ -389,7 +389,7 @@ export async function emitirFactura(d: DatosComprobante): Promise<ResultadoEmisi
    * PASTERIS se quedó sin facturar. Cada intento es una request, así que el tope existe — pero
    * tiene que cubrir un día entero de reparto adelantado.
    */
-  const INTENTOS = 10;
+  const INTENTOS = INTENTOS_CHOQUE;
   // Ya se sabe que no es null (el guard de arriba); TypeScript lo pierde dentro del closure.
   let num: number = numero;
   // Los renglones que se mandan: se les puede sacar la lista a los que IM rechace (ver abajo).
@@ -511,15 +511,25 @@ export async function emitirRemito(d: DatosComprobante): Promise<ResultadoEmisio
  *
  * O sea que cada comprobante que emitíamos para mañana se escondía de nuestro propio contador.
  */
-const DIAS_ADELANTE_REMITO = Number(process.env.IM_DIAS_ADELANTE_REMITO || 30);
+const DIAS_ADELANTE_REMITO = Number(process.env.IM_DIAS_ADELANTE_REMITO || 120);
 
 /**
  * ⏱️ Cuántos días hacia atrás se miran ANTES de abrir la ventana larga.
  *
  * `fetchVentas` cuesta proporcional al rango: 7 días son ~5 s y 30 días ~31 s (medido contra IM
  * el 09/09/2026). Buscar el próximo número es lo primero que pasa al apretar Facturar.
+ *
+ * 🔄 04/10/2026: 7 → 3, y 120 hacia adelante (ver DIAS_ADELANTE_REMITO). Criterio aprobado por
+ * Mati, el mismo de app_pedidos: `/ventas` no filtra por talonario ni comprime, así que sólo
+ * pedir menos días baja el costo. Hacia adelante casi no hay filas: sólo lo fechado a futuro.
+ * Una factura fechada más de 3 días atrás con un número más alto no se ve; IM contesta "ya
+ * existe" y el reintento sube el número (hasta INTENTOS_CHOQUE, cada choque no crea nada).
  */
-const DIAS_BUSQUEDA_CORTA = 7;
+const DIAS_BUSQUEDA_CORTA = 3;
+/** El respaldo cuando en la ventana corta no aparece el talonario (feriado largo, talonario nuevo). */
+export const DIAS_BUSQUEDA_RESPALDO = 20;
+/** Cuántas veces se prueba el número siguiente cuando IM contesta "ya existe". */
+const INTENTOS_CHOQUE = 30;
 
 /**
  * El próximo número del talonario de REMITOS. Igual que las facturas, IM no lo asigna en el
@@ -529,17 +539,21 @@ const DIAS_BUSQUEDA_CORTA = 7;
  * número puede estar tomado —la oficina emite desde IM al mismo tiempo—, y por eso quien lo usa
  * reintenta con el siguiente.
  */
-export async function proximoNumeroRemito(puntoDeVenta: number, dias = 7): Promise<number | null> {
-  const ventas = await fetchVentasParaNumeracion(
-    fechaArgentina(Date.now() - dias * 864e5),
-    fechaArgentina(Date.now() + DIAS_ADELANTE_REMITO * 864e5),
-  );
-  const nums = ventas
-    .filter((v: any) =>
-      String(v.tipo_comprobante ?? '').trim() === 'RE' && Number(v.punto_de_venta) === puntoDeVenta)
-    .map((v: any) => Number(v.numero))
-    .filter((n) => Number.isFinite(n));
-  return nums.length ? Math.max(...nums) + 1 : null;
+export async function proximoNumeroRemito(puntoDeVenta: number): Promise<number | null> {
+  // La MISMA ventana que la factura: en una tanda las dos salen de una sola lectura (cache de 20 s).
+  const maxDe = async (diasAtras: number) => {
+    const ventas = await fetchVentasParaNumeracion(
+      fechaArgentina(Date.now() - diasAtras * 864e5),
+      fechaArgentina(Date.now() + DIAS_ADELANTE_REMITO * 864e5),
+    );
+    const nums = ventas
+      .filter((v: any) =>
+        String(v.tipo_comprobante ?? '').trim() === 'RE' && Number(v.punto_de_venta) === puntoDeVenta)
+      .map((v: any) => Number(v.numero))
+      .filter((n) => Number.isFinite(n));
+    return nums.length ? Math.max(...nums) + 1 : null;
+  };
+  return (await maxDe(DIAS_BUSQUEDA_CORTA)) ?? maxDe(DIAS_BUSQUEDA_RESPALDO);
 }
 
 /**
@@ -660,7 +674,7 @@ export async function emitirRemitoMasivo(d: DatosComprobante): Promise<Resultado
       if (data && (data.isCreated === false || data.detalles || data.mensaje)) {
         const r = interpretar(data, 'RE');
         if (!r.ok) {
-          if (!r.sinRespuesta && esChoqueDeNumero(r.error) && intento < 4) { numero += 1; continue; }
+          if (!r.sinRespuesta && esChoqueDeNumero(r.error) && intento < INTENTOS_CHOQUE - 1) { numero += 1; continue; }
           return r;
         }
       }
@@ -670,7 +684,7 @@ export async function emitirRemitoMasivo(d: DatosComprobante): Promise<Resultado
       const e = comoError(err);
       // 🪤 `sinRespuesta` NO se reintenta: sin respuesta de IM el remito puede haber salido igual
       // y el reintento emitiría un segundo remito por la misma mercadería.
-      if (!e.ok && !e.sinRespuesta && esChoqueDeNumero(e.error) && intento < 4) { numero += 1; continue; }
+      if (!e.ok && !e.sinRespuesta && esChoqueDeNumero(e.error) && intento < INTENTOS_CHOQUE - 1) { numero += 1; continue; }
       return e;
     }
   }
@@ -786,7 +800,7 @@ async function emitirNota(
    * 🪤 En automático se ignora un `d.numero` que venga de afuera: mezclar los dos modos en una
    * misma emisión es pedir un número y a la vez decir cuál.
    */
-  const numero = NUMERO_NC_AUTO ? 0 : (d.numero ?? await proximoNumeroFactura(letra, PTO_VENTA_NC, 30, tipo, serieNota));
+  const numero = NUMERO_NC_AUTO ? 0 : (d.numero ?? await proximoNumeroFactura(letra, PTO_VENTA_NC, DIAS_BUSQUEDA_RESPALDO, tipo, serieNota));
   if (!NUMERO_NC_AUTO && (numero == null || !Number.isSafeInteger(numero) || numero <= 0)) {
     // 🪤 Sin 'emitila y vinculala': vincular una nota externa existe para las NC de una hoja, no
     // para las ND.

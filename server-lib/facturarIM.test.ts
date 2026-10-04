@@ -122,15 +122,17 @@ describe('emitirFactura', () => {
     });
 
     // Eran 3 intentos y no alcanzaban: el 09/09/2026 había 4 facturas seguidas fechadas para
-    // el día siguiente y PASTERIS se quedó sin facturar. Ahora son 10, pero sigue habiendo tope:
-    // cada intento es una request y probar sin fin colgaría la pantalla.
-    it('🔴 después de 10 choques se rinde en vez de seguir probando para siempre', async () => {
+    // el día siguiente y PASTERIS se quedó sin facturar. Después 10, y desde el 04/10/2026 son 30:
+    // la numeración mira sólo 3 días atrás, y una tanda fechada antes no se ve (criterio de Mati,
+    // el mismo de app_pedidos). Cada choque no crea nada. Sigue habiendo tope: probar sin fin
+    // colgaría la pantalla.
+    it('🔴 después de 30 choques se rinde en vez de seguir probando para siempre', async () => {
         const post = vi.fn(async () => ({ data: { mensaje: 'Ya existe una factura con los siguientes datos' } }));
         vi.mocked(axios.create).mockReturnValue({ post, get: vi.fn(), put: vi.fn(), interceptors: { request: { use: vi.fn() } } } as any);
         vi.mocked(axios.post).mockResolvedValue({ data: { token: 'tok' } } as any);
         const r = await emitirFactura({ ...DATOS, numero: 50360 } as any);
         expect(r.ok).toBe(false);
-        expect(post).toHaveBeenCalledTimes(10);
+        expect(post).toHaveBeenCalledTimes(30);
     });
 
     it('lleva el presupuesto de origen en cod_compatibilidad', async () => {
@@ -433,9 +435,11 @@ describe('la numeración no paga 30 días de ventas cuando alcanza con 7', () =>
     expect(await proximoNumeroFactura('B', 777, 30, 'FA', SERIE)).toBe(50411);
     expect(get).toHaveBeenCalledTimes(1);
     const { fechaDesde, fechaHasta } = (get.mock.calls[0] as any[])[1].params;
-    // Una semana atrás, no un mes: es la diferencia entre 5 s y 31 s.
-    const dias = (Date.parse(fechaHasta) - Date.parse(fechaDesde)) / 864e5;
-    expect(dias).toBeLessThan(40);
+    // Pocos días hacia ATRÁS, que es donde están las filas (desde el 04/10/2026, 3). Hacia
+    // adelante mira 120 pero ahí sólo hay lo fechado a futuro.
+    const hoy = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
+    expect((Date.parse(hoy) - Date.parse(fechaDesde)) / 864e5).toBeLessThanOrEqual(3);
+    expect(fechaHasta > hoy).toBe(true);
   });
 
   it('sin nada en la semana corta se abre a la ventana larga antes de rendirse', async () => {
@@ -1100,4 +1104,88 @@ describe('el cod_compatibilidad del remito', () => {
         await emitirFactura({ ...DATOS, origen_id: '58890545' } as any);
         expect((post.mock.calls[0] as any[])[1].cod_compatibilidad).toBe('58890545');
     });
+});
+
+/**
+ * ⏱️ 04/10/2026 — EL NÚMERO SE BUSCA EN 3 DÍAS, NO EN 7.
+ *
+ * Criterio aprobado por Mati (el mismo que bajó app_pedidos de 92,7 s a 5,8 s con los mismos
+ * números): `/ventas` no filtra por talonario ni comprime, así que la única forma de pagar menos es
+ * pedir menos días. 3 hacia atrás y 120 hacia adelante (hay comprobantes con fecha futura); si en
+ * esos 3 días no aparece el talonario, 20. Medido en app_ctacte ese día: 7+30 días eran 9,4 s y 7
+ * llamadas a IM antes de la primera factura de CADA tanda (el cache dura 20 s).
+ *
+ * Lo que se acepta a cambio: una factura fechada más de 3 días atrás con un número más alto no se
+ * ve; IM contesta "ya existe" y el reintento prueba el siguiente (hasta 30, ver arriba).
+ */
+describe('la numeración mira 3 días atrás y 120 adelante', () => {
+  const hoyAR = (dias: number) => new Date(Date.now() - 3 * 3600e3 + dias * 864e5).toISOString().slice(0, 10);
+  const conVentas = (porLlamada: any[][]) => {
+    let i = 0;
+    const get = vi.fn(async () => ({ data: { results: porLlamada[Math.min(i++, porLlamada.length - 1)] } }));
+    vi.mocked(axios.create).mockReturnValue({
+      post: vi.fn(), get, put: vi.fn(), interceptors: { request: { use: vi.fn() } },
+    } as any);
+    vi.mocked(axios.post).mockResolvedValue({ data: { token: 'tok' } } as any);
+    return get;
+  };
+  beforeEach(async () => { (await import('./infomanager.js')).invalidarCacheNumeracion(); });
+
+  it('la ventana corta va de hoy−3 a hoy+120', async () => {
+    const get = conVentas([[{ numero: 51200, tipo_comprobante: 'FA', tipo_factura: 'B', punto_de_venta: 777, ...SERIE }]]);
+    const { proximoNumeroFactura } = await import('./facturarIM.js');
+    expect(await proximoNumeroFactura('B', 777, 20, 'FA', SERIE)).toBe(51201);
+    const { fechaDesde, fechaHasta } = (get.mock.calls[0] as any[])[1].params;
+    expect([fechaDesde, fechaHasta]).toEqual([hoyAR(-3), hoyAR(120)]);
+  });
+
+  it('sin el talonario en esos 3 días, el respaldo mira 20', async () => {
+    const get = conVentas([[], [{ numero: 51200, tipo_comprobante: 'FA', tipo_factura: 'B', punto_de_venta: 777, ...SERIE }]]);
+    const { proximoNumeroFactura } = await import('./facturarIM.js');
+    expect(await proximoNumeroFactura('B', 777, 20, 'FA', SERIE)).toBe(51201);
+    expect((get.mock.calls[1] as any[])[1].params.fechaDesde).toBe(hoyAR(-20));
+  });
+
+  it('el remito usa la MISMA lectura que la factura: una tanda lee /ventas una sola vez', async () => {
+    const get = conVentas([[
+      { numero: 51200, tipo_comprobante: 'FA', tipo_factura: 'B', punto_de_venta: 777, ...SERIE },
+      { numero: 78500, tipo_comprobante: 'RE', punto_de_venta: 7 },
+    ]]);
+    const { proximoNumeroFactura, proximoNumeroRemito } = await import('./facturarIM.js');
+    expect(await proximoNumeroFactura('B', 777, 20, 'FA', SERIE)).toBe(51201);
+    expect(await proximoNumeroRemito(7)).toBe(78501);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('el remito sin remitos del punto en 3 días también mira 20', async () => {
+    const get = conVentas([[], [{ numero: 78500, tipo_comprobante: 'RE', punto_de_venta: 7 }]]);
+    const { proximoNumeroRemito } = await import('./facturarIM.js');
+    expect(await proximoNumeroRemito(7)).toBe(78501);
+    expect((get.mock.calls[1] as any[])[1].params.fechaDesde).toBe(hoyAR(-20));
+  });
+});
+
+describe('emitirRemitoMasivo — una tanda fechada antes de la ventana', () => {
+  it('🔴 reintenta con el siguiente número hasta 30 veces: 6 choques seguidos no lo frenan', async () => {
+    let intentos = 0;
+    const post = vi.fn(async () => {
+      intentos += 1;
+      if (intentos <= 6) throw { response: { status: 500, data: { detalles: `Validaciones: • El número de comprobante [${78500 + intentos}] ya existe para el punto de venta [7] y empresa [1].` } } };
+      return { data: '' };
+    });
+    let consultas = 0;
+    const get = vi.fn(async () => {
+      consultas += 1;
+      const rows = consultas === 1
+        ? [{ id: '1', numero: 78500, tipo_comprobante: 'RE', punto_de_venta: 7, cod_cliente: 1093 }]
+        : [{ id: '9', numero: 78507, tipo_comprobante: 'RE', punto_de_venta: 7, cod_cliente: 1093 }];
+      return { data: { results: rows } };
+    });
+    vi.mocked(axios.create).mockReturnValue({ post, get, put: vi.fn(), interceptors: { request: { use: vi.fn() } } } as any);
+    vi.mocked(axios.post).mockResolvedValue({ data: { token: 'tok' } } as any);
+    (await import('./infomanager.js')).invalidarCacheNumeracion();
+    const r = await emitirRemitoMasivo(DATOS);
+    expect(post).toHaveBeenCalledTimes(7);
+    expect(r.ok).toBe(true);
+  });
 });
