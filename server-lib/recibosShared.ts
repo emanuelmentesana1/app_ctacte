@@ -51,3 +51,21 @@ export function parseMontoUpload(raw: string | null | undefined): number | null 
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
+
+/**
+ * Lo que leyó el OCR del celular (S32 · mejora 8, 05/10/2026), tal como lo manda la carga. Se guarda
+ * en `ocr_raw` para medir cuánto acierta; NO cambia el monto ni la fecha del recibo (esos los confirma
+ * quien carga). Llega del navegador: se acepta sólo la forma esperada.
+ */
+export function lecturaDelCelular(raw: unknown): { fuente: 'celular'; monto: number | null; fecha: string | null; medio: 'mercadopago' | 'recaudadora_1' | null } | null {
+  if (typeof raw !== 'string' || raw.length > 500) return null;
+  let d: unknown;
+  try { d = JSON.parse(raw); } catch { return null; }
+  if (!d || typeof d !== 'object') return null;
+  const x = d as Record<string, unknown>;
+  const monto = typeof x.monto === 'number' && Number.isFinite(x.monto) && x.monto > 0 && x.monto < 1e9 ? Math.round(x.monto * 100) / 100 : null;
+  const fecha = typeof x.fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x.fecha) ? x.fecha : null;
+  const medio = x.medio === 'mercadopago' || x.medio === 'recaudadora_1' ? x.medio : null;
+  if (monto == null && fecha == null && medio == null) return null;
+  return { fuente: 'celular', monto, fecha, medio };
+}

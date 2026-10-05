@@ -11,7 +11,7 @@ import { rangoDeRecibos, MAX_FILAS } from './rangoRecibos.js';
 import { resolveCuentaCod, debugCuentasResolver, invalidateCuentasCache, listCuentasEfectivo } from './cuentasResolver.js';
 import { buscarPagoEnMP, todayISO_AR, mpConfigStatus, type MPMatch, type MPCuenta } from './mercadopago.js';
 import { ajustarImputacionIM, validarContraPendientes } from './recibosImputacion.js';
-import { CADUCADO_PREFIX, parseMontoUpload } from './recibosShared.js';
+import { CADUCADO_PREFIX, parseMontoUpload, lecturaDelCelular } from './recibosShared.js';
 import { usuarioIMDelAprobador, esRechazoPorUsuario } from './usuarioReciboIM.js';
 import { registrarTiempo } from './tiempos.js';
 import type { JwtPayload } from './auth.js';
@@ -215,7 +215,8 @@ export async function uploadRecibo(req: Request & { user?: JwtPayload; file?: an
       observaciones: req.body?.observaciones ?? null,
       foto_url: objectPath,
       foto_mime: file?.mimetype ?? null,
-      ocr_raw: ocr,
+      // Sin OCR del servidor (no hay clave), queda lo que leyó el celular: sirve para medir cuánto acierta.
+      ocr_raw: ocr ?? lecturaDelCelular(req.body?.ocr_celular),
       ocr_confidence: ocrConfidence,
       status: 'pendiente_revision' as const,
       created_by: user.sub,

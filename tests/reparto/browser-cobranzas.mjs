@@ -36,7 +36,7 @@ const invoices = [
   { COD_CLIENT: '815', CLIENTES_N: 'CLIENTE BETA', SALDO: 80_000, DIAS_EMISI: 4 },
 ];
 
-async function abrir(user, { alAprobar, duplicados, lote, controlIM } = {}) {
+async function abrir(user, { alAprobar, duplicados, lote, controlIM, alSubir } = {}) {
   const ctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   await ctx.addInitScript(() => localStorage.setItem('auth_token', 'audit-local-only'));
   const page = await ctx.newPage();
@@ -65,6 +65,10 @@ async function abrir(user, { alAprobar, duplicados, lote, controlIM } = {}) {
     if (u.pathname === '/api/recibos/posibles-duplicados') {
       if (!duplicados) return reply(route, { ok: true, app: [], im: [], consultado: { app: true, im: true } });
       return reply(route, { ok: true, ...duplicados(u.searchParams), consultado: { app: true, im: true } });
+    }
+    if (u.pathname === '/api/recibos/upload' && metodo === 'POST') {
+      alSubir?.(route.request().postData() ?? '');
+      return reply(route, { ok: true, comprobante: { id: 'nuevo' }, ocr: null });
     }
     if (u.pathname === '/api/recibos') return reply(route, { ok: true, recibos: pendientes, periodo: 'últimos 30 días', truncado: false });
     let m = u.pathname.match(/^\/api\/recibos\/(r\d)\/facturas-candidatas$/);
@@ -152,6 +156,68 @@ try {
       assert(await enviar.isDisabled(), 'Con un posible repetido no debería dejar enviar sin confirmar');
       await aviso.locator('input[type="checkbox"]').check();
       assert(await enviar.isEnabled(), 'Confirmado "es otro pago", tiene que dejar enviar');
+    } finally { await ctx.close(); }
+  });
+
+  /**
+   * OCR en el celular (S32 · mejora 8, Mati 05/10/2026): corre de verdad (Tesseract, servido por la
+   * app desde /ocr) sobre un comprobante dibujado acá. No se usan fotos reales: tienen datos de clientes.
+   * La transferencia va a la Recaudadora 1 y el medio de fábrica es MercadoPago: el error que se
+   * repitió 26 veces entre mayo y octubre.
+   */
+  async function subirComprobanteDibujado(page) {
+    const b64 = await page.evaluate(() => {
+      const c = document.createElement('canvas'); c.width = 800; c.height = 700;
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#111';
+      const linea = (t, y, px, peso = '') => { g.font = `${peso} ${px}px sans-serif`; g.fillText(t, 40, y); };
+      linea('Comprobante de transferencia', 90, 40, 'bold');
+      linea('2/octubre/2026 a las 12:41.', 150, 32);
+      linea('$ 418.769', 270, 72, 'bold');
+      linea('Motivo: Varios', 330, 30);
+      linea('Para', 430, 30);
+      linea('Semillero El Manantial', 480, 34, 'bold');
+      linea('CVU: 0000003100099266226170', 530, 30);
+      return c.toDataURL('image/png').split(',')[1];
+    });
+    await page.locator('.rec-upload input[type="file"]').setInputFiles({ name: 'comprobante.png', mimeType: 'image/png', buffer: Buffer.from(b64, 'base64') });
+  }
+
+  await test('Vendedor: el OCR del celular completa monto y fecha, y avisa si la cuenta no es la elegida', async () => {
+    let subido = '';
+    const { page, ctx } = await abrir(julio, { alSubir: cuerpo => { subido = cuerpo; } });
+    try {
+      await page.locator('.vs-nav-btn', { hasText: 'Cobranzas' }).click();
+      await page.locator('.vs-client[data-client-cod="722"] .vs-qa.pay').click();
+      await page.locator('.rec-upload').waitFor();
+      await subirComprobanteDibujado(page);
+      const aviso = page.locator('.rec-foto-difiere');
+      await aviso.waitFor({ timeout: 90_000 });
+      assert(await page.locator('.rec-field input[inputmode="decimal"]').inputValue() === '418769', 'No completó el monto de la foto');
+      assert(await page.locator('.rec-field input[type="date"]').inputValue() === '2026-10-02', 'No completó la fecha de la foto');
+      assert(/Recaudadora 1/.test(await aviso.innerText()), `El aviso no dice a qué cuenta fue: ${await aviso.innerText()}`);
+      await aviso.locator('.rec-foto-cambiar').click();
+      assert(await page.locator('.rec-field select').first().inputValue() === 'recaudadora_1', '"Cambiar" no corrigió el medio');
+      await page.locator('.rec-foto-ok').waitFor({ timeout: 3000 });
+      await page.locator('.rec-form-actions .btn-primary').click();
+      await page.locator('.rec-msg--ok').waitFor({ timeout: 5000 });
+      assert(/name="ocr_celular"[\s\S]*"monto":418769/.test(subido), 'No mandó lo que leyó el celular');
+    } finally { await ctx.close(); }
+  });
+
+  await test('Vendedor: lo que ya tipeó no se pisa; si no coincide con la foto, avisa', async () => {
+    const { page, ctx } = await abrir(julio);
+    try {
+      await page.locator('.vs-nav-btn', { hasText: 'Cobranzas' }).click();
+      await page.locator('.vs-client[data-client-cod="722"] .vs-qa.pay').click();
+      await page.locator('.rec-upload').waitFor();
+      await page.locator('.rec-field input[inputmode="decimal"]').fill('400000');
+      await subirComprobanteDibujado(page);
+      const aviso = page.locator('.rec-foto-difiere');
+      await aviso.waitFor({ timeout: 90_000 });
+      assert(await page.locator('.rec-field input[inputmode="decimal"]').inputValue() === '400000', 'Pisó el monto que había tipeado');
+      const texto = await aviso.innerText();
+      assert(texto.includes('418.769') && texto.includes('400.000'), `El aviso no muestra las dos cifras: ${texto}`);
     } finally { await ctx.close(); }
   });
 

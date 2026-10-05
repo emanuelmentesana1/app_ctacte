@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseMontoUpload } from './recibosShared.js';
+import { parseMontoUpload, lecturaDelCelular } from './recibosShared.js';
 
 /**
  * Bug auditoría 22-jul: el server re-parseaba como formato AR lo que el front
@@ -40,3 +40,28 @@ describe('parseMontoUpload', () => {
     expect(parseMontoUpload('abc')).toBeNull();
   });
 });
+
+/**
+ * Lo que leyó el OCR del celular (S32 · mejora 8, 05/10/2026) se guarda con el recibo para medir
+ * cuánto acierta. Llega del navegador: se acepta sólo la forma esperada y nada más.
+ */
+describe('lecturaDelCelular', () => {
+  it('guarda monto, fecha y cuenta de la foto, marcados como del celular', () => {
+    expect(lecturaDelCelular(JSON.stringify({ monto: 418769.3, fecha: '2026-09-30', medio: 'recaudadora_1' })))
+      .toEqual({ fuente: 'celular', monto: 418769.3, fecha: '2026-09-30', medio: 'recaudadora_1' });
+  });
+
+  it('lo que no tiene la forma esperada se descarta, campo por campo', () => {
+    expect(lecturaDelCelular(JSON.stringify({ monto: 'mucho', fecha: '30/09/2026', medio: 'banco', extra: 'x', monto2: 1 })))
+      .toBe(null);
+    expect(lecturaDelCelular(JSON.stringify({ monto: 1500, fecha: 'ayer', medio: null })))
+      .toEqual({ fuente: 'celular', monto: 1500, fecha: null, medio: null });
+  });
+
+  it('nada, basura o algo enorme: no se guarda', () => {
+    expect(lecturaDelCelular(undefined)).toBe(null);
+    expect(lecturaDelCelular('{no es json')).toBe(null);
+    expect(lecturaDelCelular('x'.repeat(600))).toBe(null);
+  });
+});
+

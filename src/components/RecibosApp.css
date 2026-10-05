@@ -664,3 +664,17 @@
 .rec-control-im { display: flex; flex-direction: column; gap: 4px; font-size: 13px }
 .rec-control-im-chip { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #EEC045; background: #FFF6E0; color: #5c4510; border-radius: 999px; padding: 3px 10px; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer }
 .rec-control-im ul { margin: 0; padding-left: 18px; color: #5c4510 }
+
+/* OCR en el celular (S32 · mejora 8, 05/10/2026): lo leído de la foto y el aviso si no coincide con lo cargado. */
+.rec-foto-leyendo, .rec-foto-ok { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: #6e7670 }
+.rec-foto-difiere {
+    background: #FFF6E0; border: 1px solid #EEC045; border-radius: 12px; padding: 10px 12px;
+    font-size: 13px; color: #5c4510; display: flex; flex-direction: column; gap: 6px;
+}
+.rec-foto-difiere > strong { display: flex; align-items: center; gap: 6px }
+.rec-foto-difiere ul { margin: 0; padding-left: 18px }
+.rec-foto-difiere li { margin: 2px 0 }
+.rec-foto-cambiar {
+    margin-left: 6px; border: 1px solid #EEC045; background: #fff; color: #5c4510; border-radius: 999px;
+    padding: 2px 10px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+}

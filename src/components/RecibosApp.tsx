@@ -5,6 +5,9 @@ import { buscarClientes } from '../utils/buscarClientes';
 import { formatCurrency, formatCurrency2 } from '../utils/formatters';
 import { MEDIOS_PAGO_UI, DEFAULT_MEDIO_UI, normalizeMedioUI, exigeFotoUI } from '../utils/mediosPago';
 import { preseleccionFIFO, siguienteEnCola } from '../utils/aprobacionRecibos';
+import { leerComprobante } from '../utils/ocrNavegador';
+import type { DatosComprobante } from '../utils/ocrComprobante';
+import { hoyArgentina } from '../utils/hoyArgentina';
 import './RecibosApp.css';
 
 interface Props {
@@ -666,6 +669,13 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, cl
     const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
     const [ocrResult, setOcrResult] = useState<any>(null);
     /**
+     * OCR en el celular (S32 · mejora 8, Mati 05/10/2026): apenas se elige la foto se leen el monto, la
+     * fecha y a qué cuenta de Semillero fue la transferencia. Se prellena sólo lo que está vacío y se
+     * avisa si lo cargado no coincide con la foto.
+     */
+    const [foto, setFoto] = useState<{ leyendo: true } | { leyendo: false; datos: DatosComprobante } | null>(null);
+    const lecturaVigente = useRef(0);
+    /**
      * ¿Este pago ya figura? Se pregunta solo, apenas hay cliente, monto y fecha. Si aparece algo
      * parecido hay que confirmar que es otro pago antes de enviar (S32: 52 de 63 rechazos de
      * septiembre eran pagos ya imputados por otro lado o subidos dos veces).
@@ -703,6 +713,17 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, cl
         setFile(f);
         if (previewUrl) URL.revokeObjectURL(previewUrl);
         setPreviewUrl(URL.createObjectURL(f));
+        const lectura = ++lecturaVigente.current;
+        if (!f.type.startsWith('image/')) { setFoto(null); return; }
+        setFoto({ leyendo: true });
+        leerComprobante(f, hoyArgentina()).then(datos => {
+            if (lectura !== lecturaVigente.current) return;   // ya eligió otra foto
+            if (!datos || (datos.monto == null && datos.fecha == null && datos.medio == null)) { setFoto(null); return; }
+            setFoto({ leyendo: false, datos });
+            // Sólo lo vacío: lo que tipeó el vendedor no se pisa (si no coincide, se avisa).
+            if (datos.monto != null) setMonto(m => m || String(datos.monto));
+            if (datos.fecha) setFecha(x => x || (datos.fecha as string));
+        });
     };
 
     // Sanitiza lo que el user escribe en el campo monto: saca "$", letras, espacios,
@@ -747,6 +768,8 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, cl
             if (fecha) fd.append('fecha_comprobante', fecha);
             if (medioPago) fd.append('medio_pago', medioPago);
             if (observaciones) fd.append('observaciones', observaciones);
+            // Lo que leyó el celular queda guardado con el recibo: así se mide cuánto acierta.
+            if (foto && !foto.leyendo) fd.append('ocr_celular', JSON.stringify(foto.datos));
             const res = await fetch('/api/recibos/upload', {
                 method: 'POST',
                 headers: authHeaders(), // NO Content-Type: lo setea el browser con boundary
@@ -878,6 +901,9 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, cl
                     )}
                 </div>
 
+                {foto?.leyendo && <p className="rec-foto-leyendo"><Loader2 size={13} className="spin" /> Leyendo la foto…</p>}
+                {foto && !foto.leyendo && <AvisoFoto datos={foto.datos} monto={monto} fecha={fecha} medio={medioPago} onMedio={setMedioPago} />}
+
                 <label className="rec-field">
                     <span>Observaciones</span>
                     <textarea rows={2} value={observaciones} onChange={e => setObservaciones(e.target.value)} placeholder="Ej: cliente pidió imputar a FA 142847" />
@@ -966,6 +992,46 @@ function motivoPorDuplicado(d: Duplicados): string {
  * "Este pago puede estar repetido" (S32, 04/10/2026). En septiembre 52 de los 63 rechazos fueron
  * pagos que ya estaban imputados por otro lado o subidos dos veces. Es un aviso: decide la persona.
  */
+/**
+ * Lo que leyó el OCR del celular contra lo cargado. Si todo coincide es una línea chica; si algo no
+ * coincide, un aviso. 🪤 La cuenta: entre mayo y octubre de 2026, 26 pagos a la Recaudadora 1 se
+ * cargaron como "MercadoPago" (la cuenta principal) y 2 quedaron en la cuenta equivocada de IM.
+ */
+function AvisoFoto({ datos, monto, fecha, medio, onMedio }: {
+    datos: DatosComprobante; monto: string; fecha: string; medio: string; onMedio: (m: string) => void;
+}) {
+    const etiqueta = (m: string) => MEDIOS_PAGO_UI.find(x => x.value === m)?.label ?? m;
+    const difiere: ReactNode[] = [];
+    if (datos.monto != null && Number(monto) > 0 && Math.abs(Number(monto) - datos.monto) > 1) {
+        difiere.push(<li key="monto">La foto dice {formatMoneyExact(datos.monto)} y cargaste {formatMoneyExact(Number(monto))}.</li>);
+    }
+    if (datos.fecha && fecha && fecha !== datos.fecha) {
+        difiere.push(<li key="fecha">La foto dice {ddmm(datos.fecha)} y cargaste {ddmm(fecha)}.</li>);
+    }
+    if (datos.medio && datos.medio !== medio) {
+        const destino = datos.medio;
+        difiere.push(
+            <li key="medio">
+                La transferencia fue a la {etiqueta(destino)} y elegiste {etiqueta(medio)}.
+                <button type="button" className="rec-foto-cambiar" onClick={() => onMedio(destino)}>Cambiar a {etiqueta(destino)}</button>
+            </li>,
+        );
+    }
+    if (!difiere.length) {
+        return (
+            <p className="rec-foto-ok">
+                <Check size={13} /> Leído de la foto{datos.monto != null ? `: ${formatMoneyExact(datos.monto)}` : ''}{datos.fecha ? ` · ${ddmm(datos.fecha)}` : ''}. Revisalo antes de enviar.
+            </p>
+        );
+    }
+    return (
+        <div className="rec-foto-difiere" role="alert">
+            <strong><AlertCircle size={14} /> Revisá con la foto</strong>
+            <ul>{difiere}</ul>
+        </div>
+    );
+}
+
 function AvisoDuplicados({ dup, children }: { dup: Duplicados; children?: ReactNode }) {
     return (
         <div className="rec-dup" role="alert">
