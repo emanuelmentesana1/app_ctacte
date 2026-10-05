@@ -49,6 +49,8 @@ export function LiquidacionView() {
     const [mes, setMes] = useState(mesActual());
     const [choferes, setChoferes] = useState<ChoferLiq[]>([]);
     const [totales, setTotales] = useState<TotalesLiq | null>(null);
+    /** 🔄 05/10/2026: entregas que cuentan, pero su remito figura anulado o borrado en IM. Es un aviso. */
+    const [anulados, setAnulados] = useState<Array<{ hoja: number; cliente_nombre: string | null; total: number | null; remito: number | null }>>([]);
     const [sinCerrar, setSinCerrar] = useState<{ hojas: number; importe: number } | null>(null);
     const [cargando, setCargando] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -70,7 +72,7 @@ export function LiquidacionView() {
         if (!/^\d{4}-\d{2}$/.test(mes)) { setCargando(false); return; }
 
         setCargando(true); setError(null);
-        setChoferes([]); setTotales(null); setSinCerrar(null);
+        setChoferes([]); setTotales(null); setSinCerrar(null); setAnulados([]);
         (async () => {
             try {
                 const r = await fetch(`/api/liquidacion?mes=${mes}`, { headers: authHeaders(), signal: lectura.signal });
@@ -82,6 +84,11 @@ export function LiquidacionView() {
                 setChoferes(d.choferes ?? []);
                 setTotales(d.totales ?? null);
                 setSinCerrar(d.sin_cerrar ?? null); lectura.confirmar();
+                // Aparte y después: va a IM. Si no contesta, la liquidación se ve igual.
+                fetch(`/api/hojas-ruta/remitos-anulados?desde=${d.desde}&hasta=${d.hasta}`, { headers: authHeaders(), signal: lectura.signal })
+                    .then(r2 => r2.ok ? r2.json() : null)
+                    .then(a => { if (lectura.vigente() && a?.entregas) setAnulados(a.entregas); })
+                    .catch(() => { /* es un aviso */ });
             } catch (e: any) {
                 if (lectura.vigente()) setError(e?.message ?? 'Error de conexión');
             } finally {
@@ -116,6 +123,18 @@ export function LiquidacionView() {
             </div>
 
             {error && <div className="lq-aviso error"><AlertTriangle size={14} /> {error}</div>}
+
+            {/* 🔴 Antes de pagar: entregas que se pagan pero cuyo remito ya no está vigente en IM. */}
+            {!!anulados.length && (
+                <div className="lq-aviso">
+                    <AlertTriangle size={14} />
+                    <span>
+                        {anulados.length === 1 ? '1 entrega se paga' : `${anulados.length} entregas se pagan`}, pero su remito figura anulado o borrado en InfoManager:{' '}
+                        {anulados.map(a => `${a.cliente_nombre ?? 'cliente'} (hoja ${a.hoja}${a.total != null ? `, ${pesos(Number(a.total))}` : ''})`).join(' · ')}.
+                        {' '}Si no salieron, marcalas «No salió» en la hoja; si salieron con otro remito, no hace falta.
+                    </span>
+                </div>
+            )}
 
             {/* 🔴 Antes de pagar hay que cerrar lo que falta: esas hojas todavía pueden cambiar. */}
             {!!sinCerrar?.hojas && (

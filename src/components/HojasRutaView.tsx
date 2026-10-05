@@ -266,6 +266,11 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
      */
     const [hayEstadoEntrega, setHayEstadoEntrega] = useState(false);
     const puedeMarcarEntregas = hayEstadoEntrega && ['admin', 'gerente'].includes(String(getUser()?.rol ?? ''));
+    /**
+     * Entregas cuyo remito figura anulado o borrado en IM (Mati, 05/10/2026). Es un AVISO: puede que no
+     * haya salido, o que haya salido con otro remito (DIAZ, hoja 3402). Se pide aparte: va a IM.
+     */
+    const [anuladosEnIM, setAnuladosEnIM] = useState<Set<string>>(new Set());
     const cargarHojas = useCallback(async (antes?: number, forzar = true) => {
         const lectura = iniciarHojas(forzar); if (!lectura) return;
         setCargandoHojas(true); setErrorHojas(null);
@@ -301,6 +306,16 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
         finally { if (lectura.vigente()) setCargandoHojas(false); }
     }, [desde, hasta, historico, iniciarHojas]);
     useEffect(() => { void cargarHojas(undefined, false); }, [cargarHojas]);
+    // Con cada lectura de las hojas: el servidor lo recuerda 5 minutos y lo olvida al marcar «no salió».
+    useEffect(() => {
+        if (historico || !hojas.length) { setAnuladosEnIM(new Set()); return; }
+        const ctrl = new AbortController();
+        fetch(`/api/hojas-ruta/remitos-anulados?desde=${desde}&hasta=${hasta}`, { headers: authHeaders(), signal: ctrl.signal })
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d?.entregas) setAnuladosEnIM(new Set(d.entregas.map((e: any) => String(e.im_comprobante_id)))); })
+            .catch(() => { /* es un aviso: si IM no contesta, la hoja se usa igual */ });
+        return () => ctrl.abort();
+    }, [desde, hasta, historico, hojas]);
 
     const enlaceUbicado = useRef(false);
     useEffect(() => {
@@ -1097,6 +1112,9 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                                             <span>{p.cliente_nombre ?? `Cliente`}</span>
                                             {noSalio && (
                                                 <span className="hr-badge grave" title={`No salió: ${p.estado_entrega_motivo ?? ''}. No cuenta en la liquidación del chofer.`}>no salió</span>
+                                            )}
+                                            {!noSalio && anuladosEnIM.has(String(p.im_comprobante_id)) && (
+                                                <span className="hr-badge aviso" title="El remito figura anulado o borrado en InfoManager. Si la mercadería no salió, marcala «No salió»; si salió con otro remito, revisá el vínculo.">remito anulado en IM</span>
                                             )}
                                             {/* Lo que se emitió queda a la vista: es el registro de qué salió de
                                                 este presupuesto, y en IM ese vínculo no existe. */}

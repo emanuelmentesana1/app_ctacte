@@ -61,7 +61,7 @@ import { listRebotes, listRecargos, syncRebotesNow, syncRebotes } from './server
 import { listProductGoals, upsertProductGoal, deleteProductGoal, searchArticulos, hermanosDeFamilia } from './server-lib/productGoals.js';
 import { guardarKilajeDeBolsa } from './server-lib/kilajeDeBolsa.js';
 import { crearPedido, listPedidos, getPedidoById, anularPedido, creditoCliente, precioArticulo, catalogoPedido, validarListasPedido, editarPedido } from './server-lib/pedidos.js';
-import { pendientesDelDia, arrastreDelDia, impresionHoja, sugerenciaDelDia, listarHojas, listarCamiones, crearHoja, editarHoja, borrarHoja, asignarPedidos, quitarPedido, marcarEstadoEntrega } from './server-lib/hojasRuta.js';
+import { pendientesDelDia, arrastreDelDia, impresionHoja, sugerenciaDelDia, listarHojas, listarCamiones, crearHoja, editarHoja, borrarHoja, asignarPedidos, quitarPedido, marcarEstadoEntrega, remitosAnulados } from './server-lib/hojasRuta.js';
 import { tableroFacturacion, previsualizarFacturacion, facturarSeleccion, liberarReclamo, habilitarRemitoPendiente, registrarRemitoExistente, registrarFacturaExistente } from './server-lib/facturarPresupuestos.js';
 import { descartarRemitoSobrante, habilitarFacturaPendiente, anularFacturaEmitida } from './server-lib/conciliarEmision.js';
 // Corregir una factura ya emitida, con notas de crédito y de débito.
@@ -790,6 +790,8 @@ app.get('/api/hojas-ruta/camiones', requireJwt, (req: any, res) => listarCamione
 app.get('/api/hojas-ruta/pendientes', requireJwt, (req: any, res) => pendientesDelDia(req, res));
 app.get('/api/hojas-ruta/sugerencia', requireJwt, (req: any, res) => sugerenciaDelDia(req, res));
 app.get('/api/hojas-ruta/arrastre', requireJwt, (req: any, res) => arrastreDelDia(req, res));
+// Aviso de «remito anulado en IM» (05/10/2026): entregas que cuentan pero su remito ya no está vigente.
+app.get('/api/hojas-ruta/remitos-anulados', requireJwt, (req: any, res) => remitosAnulados(req, res));
 app.delete('/api/hojas-ruta/pedidos/:comprobanteId', requireJwt, (req: any, res) => quitarPedido(req, res));
 app.delete('/api/hojas-ruta/ajustes/:id', requireJwt, (req: any, res) => borrarAjuste(req, res));
 app.get('/api/hojas-ruta', requireJwt, (req: any, res) => listarHojas(req, res));

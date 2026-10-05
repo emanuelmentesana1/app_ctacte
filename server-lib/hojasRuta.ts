@@ -18,7 +18,7 @@ import type { JwtPayload } from './auth.js';
 import { puedeArmarHojasDeRuta, puedeMarcarEntrega } from './permisos.js';
 import {
   fetchVentas, fetchVentasItems, fetchArticulosCatalogo, fetchClientesIMCached,
-  fechaArgentina, comprobantesPendientesCliente,
+  fechaArgentina, comprobantesPendientesCliente, comprobantesVigentes,
 } from './infomanager.js';
 import { pesoDeRenglones, cargaDelCamion, sinPesoAProposito } from './pesoComprobante.js';
 import { vistaDeRango, invalidarVista } from './vistaPresupuestos.js';
@@ -27,7 +27,7 @@ import { armarFraccionado, totalesFraccionado } from './fraccionado.js';
 import { formatosDeBolsa } from './formatosBolsa.js';
 import { sugerirRepartos } from './sugerirRepartos.js';
 import { saldoAnteriorDeLaHoja, ajusteDeNotas } from './saldoCliente.js';
-import { ErrorReparto, emitidosDe, mutarReparto, verificarEntregas, enriquecerEntregas, enriquecerHojas, aplicarImportesCierre, notasDeHoja, notasUnicas, hayEstadoEntrega, marcarEstadoEntregaRPC } from './repartoDatos.js';
+import { ErrorReparto, emitidosDe, mutarReparto, verificarEntregas, enriquecerEntregas, enriquecerHojas, aplicarImportesCierre, notasDeHoja, notasUnicas, hayEstadoEntrega, marcarEstadoEntregaRPC, leerPaginas, entregaNoSalio } from './repartoDatos.js';
 import { proximoNumeroHoja } from './numeroHojaRuta.js';
 import { comprobarEsquema } from './estadoAplicacion.js';
 import { LecturasCompartidas } from './lecturasCompartidas.js';
@@ -968,8 +968,48 @@ export async function marcarEstadoEntrega(req: Request & { user?: JwtPayload }, 
       hoja_id: String(req.params.id), im_comprobante_id: String(req.params.comprobanteId), estado, motivo: estado ? motivo : null,
       version_esperada: req.body?.version_esperada,
     });
+    avisosAnulados.clear();   // la que se marcó deja de avisarse
     res.json({ ok: true, ...(r as object) });
   } catch (err: any) { res.status(err.status ?? 500).json({ error: err.message }); }
+}
+
+/**
+ * GET /api/hojas-ruta/remitos-anulados?desde&hasta — entregas que todavía cuentan (no marcadas «no
+ * salió») pero cuyo remito ya no está vigente en InfoManager: anulado o borrado.
+ *
+ * Mati (05/10/2026): es un AVISO, no un descuento automático. DIAZ (hoja 3402) tenía el remito borrado
+ * y la mercadería salió con otro remito: sacarlo solo le habría restado $2,68 M reales a NIÑO.
+ * 🪤 Sólo cuenta un `false` de IM: «no pude preguntar» (null) no se convierte en aviso.
+ * Va aparte de la lista de hojas, que sale de nuestra base al instante: esto pregunta a IM. Una consulta
+ * de rango (con unos días antes: el remito sale antes que la hoja) y se recuerda 5 minutos.
+ */
+const avisosAnulados = new Map<string, { at: number; entregas: any[] }>();
+const correrDias = (f: string, d: number) => new Date(Date.parse(`${f}T00:00:00Z`) + d * 86_400_000).toISOString().slice(0, 10);
+export async function remitosAnulados(req: Request & { user?: JwtPayload }, res: Response) {
+  if (frenaSiNoPuede(req, res)) return;
+  const desde = String(req.query.desde ?? ''), hasta = String(req.query.hasta ?? '');
+  const fecha = /^\d{4}-\d{2}-\d{2}$/;
+  if (!fecha.test(desde) || !fecha.test(hasta) || desde > hasta || (Date.parse(hasta) - Date.parse(desde)) / 86_400_000 > 62) {
+    res.status(400).json({ error: 'Rango inválido: desde y hasta, de hasta dos meses.' }); return;
+  }
+  const clave = `${desde}|${hasta}`;
+  const visto = avisosAnulados.get(clave);
+  if (visto && Date.now() - visto.at < 300_000 && req.query.refrescar !== '1') { res.json({ ok: true, entregas: visto.entregas }); return; }
+  try {
+    const hojas = await leerPaginas(() => sb().from('hojas_ruta').select('id, numero, fecha, estado, hojas_ruta_pedidos(*)')
+      .eq('tenant_id', TENANT_ID).gte('fecha', desde).lte('fecha', hasta).order('fecha').order('id'));
+    const filas = (hojas as any[]).filter(h => h.estado !== 'anulada').flatMap(h => (h.hojas_ruta_pedidos ?? [])
+      .filter((p: any) => !entregaNoSalio(p)).map((p: any) => ({ h, p, remito: String(p.im_remito_id ?? p.im_comprobante_id) })));
+    const vigencia = filas.length ? await comprobantesVigentes(filas.map(f => f.remito), { desde: correrDias(desde, -5), hasta: correrDias(hasta, 2) }) : new Map();
+    const entregas = filas.filter(f => vigencia.get(f.remito) === false).map(({ h, p }) => ({
+      hoja_id: String(h.id), hoja: h.numero, fecha: h.fecha, estado_hoja: h.estado, im_comprobante_id: String(p.im_comprobante_id),
+      remito: p.im_remito_numero ?? p.im_numero ?? null, cliente_nombre: p.cliente_nombre ?? null, cod_cliente: p.cod_cliente ?? null, total: p.total ?? null,
+    }));
+    avisosAnulados.set(clave, { at: Date.now(), entregas });
+    res.json({ ok: true, entregas });
+  } catch (err: any) {
+    res.status(502).json({ error: `No pude consultar InfoManager para ver los remitos anulados: ${err?.message ?? 'error'}` });
+  }
 }
 
 export async function quitarPedido(req: Request & { user?: JwtPayload }, res: Response) {

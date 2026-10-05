@@ -39,6 +39,7 @@ async function setup(width=1440, options={}) {
     if(u.pathname==='/api/choferes') return reply(route,{choferes:[{id:'ch1',nombre:'Chofer auditoría'}]});
     if(u.pathname==='/api/hojas-ruta/pendientes') return reply(route,{pendientes:rows.map(r=>({...r,factura_origen:'unica',im_factura_numero:4000,im_numero:5000})),dias_sin_items:[]});
     if(u.pathname==='/api/hojas-ruta/arrastre') return reply(route,{ok:true,cantidad:0});
+    if(u.pathname==='/api/hojas-ruta/remitos-anulados') return reply(route,{ok:true,entregas:[]});
     if(u.pathname==='/api/hojas-ruta') return reply(route,{hojas:[]});
     if(u.pathname==='/api/liquidacion') return reply(route,{mes:u.searchParams.get('mes'),choferes:[],totales:{hojas:0,pedidos:0,kg:0,importe:0},sin_cerrar:{hojas:0,importe:0}});
     if(u.pathname==='/api/retiros') return reply(route,{retiros:[]});

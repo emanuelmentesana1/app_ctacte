@@ -13,7 +13,7 @@ const hoja = pedidos => ({ version: 5, id: 'h1', numero: 3402, nombre: null, fec
   camion_id: null, capacidad_kg: null, cod_zona: 9, estado: 'cerrada', facturada: true, chofer: 'NIÑO', chofer_id: 'c1', cerrada_at: '2026-09-10',
   pedidos, totales: { pedidos: pedidos.length, bultos: 20, kg: 600 }, carga: { completa: true, porcentaje: null, excedido: false, sobra_kg: null } });
 
-async function pantalla({ rol = 'admin', capacidad = true, alMarcar } = {}) {
+async function pantalla({ rol = 'admin', capacidad = true, alMarcar, anulados = [] } = {}) {
   let marcado = false;
   const r = await setup(1440, {
     url: '/reparto?etapa=hojas&desde=2026-09-09&hasta=2026-09-09&hoja=h1', ready: '.hr-hoja',
@@ -23,6 +23,7 @@ async function pantalla({ rol = 'admin', capacidad = true, alMarcar } = {}) {
         pedido('58784016', 'LEAL, Paulina (Este)', marcado ? { estado_entrega: 'no_salio', estado_entrega_motivo: 'remito anulado 29/09, no salió' } : {}),
         pedido('58783742', 'BUSTOS, Sebastián (Este)', { total: 1368965.37 }),
       ])], capacidades: { nombre: true, estado_entrega: capacidad } }));
+      await p.route('**/api/hojas-ruta/remitos-anulados**', r2 => reply(r2, { ok: true, entregas: anulados }));
       await p.route('**/api/hojas-ruta/h1/entregas/*/estado', async r2 => { marcado = true; if (alMarcar) alMarcar(r2.request()); await reply(r2, { ok: true, version: 6, estado: 'no_salio' }); });
     },
   });
@@ -49,6 +50,15 @@ try {
     } finally { await ctx.close(); }
   });
 
+  await test('🔴 La entrega con el remito anulado en IM avisa en la fila (y las demás no)', async () => {
+    const { page, ctx } = await pantalla({ anulados: [{ hoja_id: 'h1', hoja: 3402, im_comprobante_id: '58783742', cliente_nombre: 'BUSTOS, Sebastián (Este)', total: 1368965.37 }] });
+    try {
+      const bustos = page.locator('.hr-hoja-ped', { hasText: 'BUSTOS' });
+      await bustos.locator('.hr-badge', { hasText: 'remito anulado en IM' }).waitFor();
+      assert(await page.locator('.hr-hoja-ped', { hasText: 'LEAL' }).locator('.hr-badge', { hasText: 'remito anulado en IM' }).count() === 0, 'Avisa en una entrega con el remito vigente');
+    } finally { await ctx.close(); }
+  });
+
   await test('🔴 Un administrativo no ve el botón: cambia un pago', async () => {
     const { page, ctx } = await pantalla({ rol: 'administrativo' });
     try { assert(await page.getByRole('button', { name: 'No salió' }).count() === 0, 'Un administrativo puede marcar «no salió»'); }
@@ -67,7 +77,10 @@ try {
         importe: 187828401.89, no_salieron: { entregas: 2, importe: 660059.55 }, numeros: [3402] }],
       totales: { hojas: 24, pedidos: 312, kg: 1, importe: 187828401.89, no_salieron: { entregas: 2, importe: 660059.55 } }, sin_cerrar: { hojas: 0, importe: 0 } };
     const { page, ctx } = await setup(1440, { url: '/reparto?etapa=hojas&desde=2026-09-01&hasta=2026-09-30', ready: '.hr-root',
-      beforeGoto: p => p.route('**/api/liquidacion**', r2 => reply(r2, liq)) });
+      beforeGoto: async p => {
+        await p.route('**/api/liquidacion**', r2 => reply(r2, liq));
+        await p.route('**/api/hojas-ruta/remitos-anulados**', r2 => reply(r2, { ok: true, entregas: [{ hoja: 3402, cliente_nombre: 'DIAZ, Alfredo (Este)', total: 2682199.99, remito: 77382 }] }));
+      } });
     try {
       await page.getByRole('button', { name: /Liquidación/ }).first().click();
       const card = page.locator('.lq-chofer', { hasText: 'NIÑO' });
@@ -75,6 +88,9 @@ try {
       const texto = await card.innerText();
       assert(/\$187\.828\.401,89/.test(texto), `El total no va con centavos: "${texto}"`);
       assert(/no salieron 2 entregas por \$660\.059,55/.test(texto), `No muestra lo que no salió: "${texto}"`);
+      const aviso = page.locator('.lq-aviso', { hasText: 'anulado o borrado' });
+      await aviso.waitFor();
+      assert(/DIAZ, Alfredo \(Este\) \(hoja 3402, \$2\.682\.199,99\)/.test(await aviso.innerText()), `El aviso no dice qué entrega revisar: "${await aviso.innerText()}"`);
     } finally { await ctx.close(); }
   });
 } finally {
