@@ -71,6 +71,7 @@ import { compararFacturaConRemito } from './server-lib/compararComprobantes.js';
 import { marcarRetiro, quitarRetiro, marcarRetirado, listarRetiros, resumenRetiros } from './server-lib/retirosSucursal.js';
 import { listarChoferes, liquidacionMensual } from './server-lib/liquidacionChoferes.js';
 import { rendicionesDelRango } from './server-lib/rendiciones.js';
+import { rendicionDeHoja, guardarRendicion, controlarRendicion, emitirRendicion, saldosDelMes } from './server-lib/rendirHoja.js';
 import { listarAjustes, crearAjuste, borrarAjuste, candidatasAVincular, vincularAjuste } from './server-lib/ajustesEntrega.js';
 import { anularPresupuesto } from './server-lib/anularPresupuesto.js';
 import { listarPresupuestos, revisarPresupuesto, borrarRevision, detallePresupuesto, corregirCantidades, fraccionadoDelRango, consolidadoDelRango } from './server-lib/panelPresupuestos.js';
@@ -716,6 +717,12 @@ app.get('/api/choferes', requireJwt, (req: any, res) => listarChoferes(req, res)
 app.get('/api/liquidacion', requireJwt, (req: any, res) => liquidacionMensual(req, res));
 // La rendición de las hojas, sólo lectura (etapa 1, 04/10/2026): lo cobrado contra lo entregado y el cuadre con IM.
 app.get('/api/rendiciones', requireJwt, (req: any, res) => rendicionesDelRango(req, res));
+// Rendir el efectivo de la hoja en la app (etapa 2, 05/10/2026). La emisión arranca apagada (RENDICION_TOPE=0).
+app.get('/api/rendiciones/saldos', requireJwt, (req: any, res) => saldosDelMes(req, res));
+app.get('/api/rendiciones/hoja/:id', requireJwt, (req: any, res) => rendicionDeHoja(req, res));
+app.put('/api/rendiciones/hoja/:id', requireJwt, (req: any, res) => guardarRendicion(req, res));
+app.post('/api/rendiciones/hoja/:id/controlar', requireJwt, (req: any, res) => controlarRendicion(req, res));
+app.post('/api/rendiciones/hoja/:id/emitir', requireJwt, (req: any, res) => emitirRendicion(req, res));
 
 // ── Retiro en sucursal: lo que el cliente pasa a buscar y no sale en el camión ──
 // 🪤 `/resumen` va antes que `/:comprobanteId`, o Express lo toma como un id.

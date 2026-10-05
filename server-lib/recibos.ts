@@ -412,7 +412,14 @@ export async function facturasCandidatas(req: Request & { user?: JwtPayload }, r
  */
 const aprobacionesEnCurso = new Set<string>();
 
-export async function aprobarRecibo(req: Request & { user?: JwtPayload }, res: Response) {
+/**
+ * La caja que fija el SERVIDOR, no el navegador: la rendición de la hoja emite el efectivo a Caja
+ * Repartos, que no está entre las cajas que se eligen en pantalla (etapa 2, 05/10/2026). Va como
+ * Symbol en el request armado adentro del servidor: un pedido HTTP no puede traerlo.
+ */
+export const CAJA_DEL_SERVIDOR = Symbol('cajaDelServidor');
+
+export async function aprobarRecibo(req: Request & { user?: JwtPayload; [CAJA_DEL_SERVIDOR]?: string }, res: Response) {
   const compId = String(req.params.id);
   let claimed = false;
   const t0 = Date.now();
@@ -506,16 +513,17 @@ export async function aprobarRecibo(req: Request & { user?: JwtPayload }, res: R
     // para elegir a qué CAJA de efectivo entra la plata (Caja Casa Central, Caja
     // Chica 2, etc.; ver GET /api/cuentas/efectivo). El frontend lo manda solo
     // cuando tiene sentido (medio efectivo). Debe respetar el patrón de IM.
-    const codCuentaOverride = (typeof body.cod_cuenta === 'string' && /^\d{1,10}$/.test(body.cod_cuenta.trim()))
+    const cajaDelServidor = req[CAJA_DEL_SERVIDOR] ?? null;
+    const codCuentaOverride = cajaDelServidor ?? ((typeof body.cod_cuenta === 'string' && /^\d{1,10}$/.test(body.cod_cuenta.trim()))
       ? body.cod_cuenta.trim()
-      : null;
+      : null);
     /**
      * 🔴 La cuenta la valida el SERVIDOR (S32 · mejora 6, 04/10/2026). La lista de cajas sólo
      * filtraba lo que se ve en pantalla: un pedido armado a mano podía imputar a cualquier cuenta.
      *  · Elegir caja tiene sentido sólo en efectivo, y sólo entre las habilitadas.
      *  · Pagos armados a mano: cada cuenta tiene que ser una de cobro (la de algún medio o una caja).
      */
-    if (codCuentaOverride && !esAnticipo) {
+    if (codCuentaOverride && !esAnticipo && !cajaDelServidor) {
       if (medioPago !== 'efectivo') {
         res.status(400).json({ error: `En ${medioPago} la cuenta sale del medio de pago: sólo en efectivo se elige la caja.` });
         return;

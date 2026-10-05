@@ -164,6 +164,26 @@ describe('aprobarRecibo — la caja la valida el servidor (S32 · mejora 6)', ()
   });
 });
 
+describe('aprobarRecibo — la caja que fija el servidor (rendición de la hoja, etapa 2)', () => {
+  it('🔑 la rendición emite a Caja Repartos aunque no esté entre las cajas de la pantalla', async () => {
+    const { CAJA_DEL_SERVIDOR } = await import('./recibos.js');
+    m.crearRecibo.mockResolvedValue({ ok: true, id: '1', raw: {} });
+    const rq = req({ medio_pago: 'efectivo' });
+    rq[CAJA_DEL_SERVIDOR] = '1110009';
+    const r = res();
+    await aprobarRecibo(rq, r);
+    expect(r.statusCode).toBe(200);
+    expect(m.crearRecibo.mock.calls[0][0].pagos[0]).toMatchObject({ forma_pago: 'EF', cod_cuenta: '1110009' });
+  });
+
+  it('🔴 desde el navegador, Caja Repartos se sigue rechazando: no está en la lista de cajas', async () => {
+    const r = res();
+    await aprobarRecibo(req({ medio_pago: 'efectivo', cod_cuenta: '1110009' }), r);
+    expect(r.statusCode).toBe(400);
+    expect(m.crearRecibo).not.toHaveBeenCalled();
+  });
+});
+
 describe('aprobarRecibo — registra sus tiempos (S32 · mejora 9)', () => {
   it('después de aprobar quedan medidos el total y la emisión en IM', async () => {
     const { resumenTiempos, reiniciarTiempos } = await import('./tiempos.js');

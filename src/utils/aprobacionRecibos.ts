@@ -7,6 +7,7 @@ export interface FacturaParaImputar {
     id: number | string;
     fecha_factura?: string;
     numero?: number | string;
+    punto_de_venta?: number | string;
     saldo?: number;
     importe_factura?: number;
     tipo_comprobante?: string;

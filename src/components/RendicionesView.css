@@ -92,3 +92,16 @@
     .rd-fila > span:not(.rd-cliente) { display: flex; justify-content: space-between; gap: 0.4rem; text-align: right; }
     .rd-fila > span:not(.rd-cliente)::before { content: attr(data-l); color: var(--color-text-muted); font-size: 0.74rem; text-align: left; }
 }
+
+/* Etapa 2: rendir en la app, lo que se copia en IM y el saldo del mes por repartidor. */
+.rd-detalle-acciones { display: flex; justify-content: flex-end; padding-top: 0.3rem; }
+.rd-detalle-acciones .rd-btn { margin-left: 0; }
+.rd-para-im {
+    display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.82rem; font-variant-numeric: tabular-nums;
+    border: 1px dashed var(--color-border); border-radius: var(--radius-md); padding: 0.45rem 0.65rem; overflow-wrap: anywhere;
+}
+.rd-para-im-titulo { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rd-para-im-titulo .rd-btn { margin-left: auto; padding: 0.2rem 0.6rem; }
+.rd-saldos { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1.2rem; font-size: 0.85rem; }
+.rd-saldos small { color: var(--color-text-muted); }
+.rd-saldo-contra b { color: #A83E2B; }

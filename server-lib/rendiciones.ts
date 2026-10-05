@@ -138,7 +138,12 @@ export async function rendicionesDelRango(req: Request & { user?: JwtPayload }, 
     }));
 
     const r = armarRendiciones({ hojas: hojasIn, recibosIM: recibos, mayor, transferencias, cuentaCaja: CUENTA_CAJA_REPARTOS });
-    res.json({ ok: true, desde, hasta, ...r, consultado: { im_recibos: true, im_mayor: mayorOk } });
+    // Etapa 2: lo que ya se rindió en la app. null = falta la migración 056 (la pantalla sigue en sólo lectura).
+    const { data: enApp, error: errApp } = await sb().from('rendiciones')
+      .select('hoja_id, efectivo, gastos, efectivo_contado, diferencia, contado_at, controlado_at')
+      .eq('tenant_id', TENANT_ID).in('hoja_id', hojas.map(h => String(h.id)));
+    if (errApp && !['42P01', 'PGRST205'].includes(String(errApp.code))) console.warn(`[rendiciones] rendiciones de la app: ${errApp.message}`);
+    res.json({ ok: true, desde, hasta, ...r, rendiciones_app: errApp ? null : (enApp ?? []), consultado: { im_recibos: true, im_mayor: mayorOk } });
   } catch (err) {
     const e = err as { message?: string; status?: number };
     console.error('[rendiciones]', e?.message);

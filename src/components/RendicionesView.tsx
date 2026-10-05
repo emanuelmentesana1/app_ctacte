@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, AlertTriangle, RefreshCw, Banknote, CheckCircle2, Info } from 'lucide-react';
+import { Loader2, AlertTriangle, RefreshCw, Banknote, CheckCircle2, Info, Copy, PencilLine } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import { useLecturaVigente } from '../utils/useLecturaVigente';
+import { resumenParaIM } from '../utils/rendicionCuentas';
+import { RendirHoja, type RendicionApp } from './RendirHoja';
 import './RendicionesView.css';
 
 /**
@@ -10,7 +12,10 @@ import './RendicionesView.css';
  * Muestra, por hoja y por cliente, lo cobrado contra lo entregado con lo que YA está cargado:
  * recibos de efectivo en InfoManager (Caja Repartos), transferencias en la app, notas de crédito
  * y gastos del viaje. Y si la caja del día cuadra con el asiento que pasó la plata a Caja Casa
- * Central. No emite, no cierra y no aprueba nada: eso llega en las etapas siguientes.
+ * Central. No emite, no cierra y no aprueba nada.
+ *
+ * Etapa 2 (05/10/2026): con la migración 056, cada hoja se puede rendir en la app (`RendirHoja`) y cada
+ * día muestra lo que hay que copiar en IM. Sin la 056 todo sigue en sólo lectura.
  *
  * Regla de avisos de la oficina (Mati, 04/10/2026): un aviso visible por pantalla, primero lo que
  * frena; lo informativo va a un ⓘ, con una línea corta y el detalle en el `title`.
@@ -36,12 +41,18 @@ interface Asiento {
     diferencia_calculada: number; diferencia_registrada: number | null; cuadra: boolean | null;
 }
 interface FueraDeHoja { fecha: string; total: number; recibos: { id_recibo: string; numero: string | null; fecha: string; cod_cliente: number; cliente: string | null; importe: number }[] }
-interface Respuesta { desde: string; hasta: string; hojas: Hoja[]; asientos: Asiento[]; fuera_de_hoja: FueraDeHoja[]; consultado: { im_recibos: boolean; im_mayor: boolean } }
+interface Respuesta {
+    desde: string; hasta: string; hojas: Hoja[]; asientos: Asiento[]; fuera_de_hoja: FueraDeHoja[]; consultado: { im_recibos: boolean; im_mayor: boolean };
+    /** Lo rendido en la app (etapa 2). null = falta la migración 056. */
+    rendiciones_app?: RendicionApp[] | null;
+}
+interface Saldo { chofer: string; hojas: number; contadas: number; saldo: number; sin_controlar: number }
 
 const money = (n: number) => (n < 0 ? '−$' : '$') + Math.round(Math.abs(n)).toLocaleString('es-AR');
 const ddmm = (iso: string) => iso.slice(0, 10).split('-').reverse().slice(0, 2).join('/');
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const diaLargo = (iso: string) => `${DIAS[new Date(`${iso}T12:00:00Z`).getUTCDay()]} ${ddmm(iso)}`;
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 const ESTADO: Record<Estado, { texto: string; clase: string }> = {
     pago: { texto: 'Pagó', clase: 'ok' },
     parcial: { texto: 'Pagó parte', clase: 'ambar' },
@@ -55,6 +66,7 @@ export function RendicionesView({ desde, hasta }: { desde: string; hasta: string
     const [error, setError] = useState<string | null>(null);
     const [abierta, setAbierta] = useState<string | null>(null);
     const [refrescar, setRefrescar] = useState(0);
+    const [saldos, setSaldos] = useState<Saldo[]>([]);
 
     /**
      * 🔴 Nunca pintar los números de un rango bajo el rótulo de otro (mismo cuidado que la
@@ -83,6 +95,25 @@ export function RendicionesView({ desde, hasta }: { desde: string; hasta: string
         })();
     }, [desde, hasta, refrescar, iniciar]);
 
+    /** El saldo del mes por repartidor (decisión 3 de Mati): sólo si la 056 está aplicada. */
+    const rendible = Array.isArray(datos?.rendiciones_app);
+    const mes = hasta.slice(0, 7);
+    useEffect(() => {
+        setSaldos([]);
+        if (!rendible || !/^\d{4}-\d{2}$/.test(mes)) return;
+        let vigente = true;
+        fetch(`/api/rendiciones/saldos?mes=${mes}`, { headers: authHeaders() })
+            .then(r => r.json()).then(d => { if (vigente && d?.ok) setSaldos(d.saldos ?? []); })
+            .catch(() => { /* el saldo es un dato de más: si no viene, no se muestra */ });
+        return () => { vigente = false; };
+    }, [rendible, mes, refrescar]);
+
+    /** Lo que se guardó en una hoja actualiza el resumen del día sin volver a consultar IM. */
+    function alGuardar(r: RendicionApp) {
+        setDatos(d => (d ? { ...d, rendiciones_app: [...(d.rendiciones_app ?? []).filter(x => x.hoja_id !== r.hoja_id), r] } : d));
+    }
+    const enApp = useMemo(() => new Map((datos?.rendiciones_app ?? []).map(r => [r.hoja_id, r])), [datos]);
+
     /** Por día de rendición (la fecha efectiva de la hoja), en orden. */
     const dias = useMemo(() => {
         const porDia = new Map<string, Hoja[]>();
@@ -104,9 +135,15 @@ export function RendicionesView({ desde, hasta }: { desde: string; hasta: string
     return (
         <div className="rd-root">
             <div className="rd-top">
-                <span className="rd-info" title="Muestra lo que ya está cargado: los recibos de efectivo y el libro mayor de Caja Repartos en InfoManager, y las transferencias de la app. No emite, no cierra y no aprueba nada.">
-                    <Info size={13} /> Sólo lectura
-                </span>
+                {rendible ? (
+                    <span className="rd-info" title="Abrí una hoja y tocá «Rendir en la app» para cargar lo cobrado por cliente, los gastos del viaje y lo contado. La emisión de recibos se activa con el sí de Mati.">
+                        <Info size={13} /> Rendición en la app
+                    </span>
+                ) : (
+                    <span className="rd-info" title={`Muestra lo que ya está cargado: los recibos de efectivo y el libro mayor de Caja Repartos en InfoManager, y las transferencias de la app. No emite, no cierra y no aprueba nada.${datos ? ' Para rendir en la app falta aplicar la migración 056 en la base.' : ''}`}>
+                        <Info size={13} /> Sólo lectura
+                    </span>
+                )}
                 {cargando && <Loader2 size={16} className="rd-girando" />}
                 <button className="rd-btn ghost" onClick={() => setRefrescar(n => n + 1)} disabled={cargando} title="Vuelve a consultar InfoManager">
                     <RefreshCw size={14} /> Actualizar
@@ -125,6 +162,19 @@ export function RendicionesView({ desde, hasta }: { desde: string; hasta: string
                     <div><span>Efectivo</span><b>{money(total.efectivo)}</b></div>
                     <div><span>Transferencias</span><b>{money(total.transferencias)}</b></div>
                     <div><span>Clientes sin cobro</span><b>{total.sin_cobro}</b></div>
+                </div>
+            )}
+
+            {saldos.length > 0 && (
+                <div className="rd-saldos">
+                    <span className="rd-info" title="Las diferencias de caja de las hojas contadas en el mes. No se descuentan en el momento (decisión de Mati): a fin de mes el repartidor queda a favor o en contra. Negativo: faltó plata.">
+                        <Info size={13} /> Saldo de {MESES[Number(mes.slice(5, 7)) - 1]} por repartidor
+                    </span>
+                    {saldos.map(s => (
+                        <span key={s.chofer} className={s.saldo < 0 ? 'rd-saldo-contra' : ''}>
+                            {s.chofer} <b>{money(s.saldo)}</b>{s.sin_controlar ? <small> ({s.sin_controlar} sin controlar)</small> : null}
+                        </span>
+                    ))}
                 </div>
             )}
 
@@ -147,10 +197,12 @@ export function RendicionesView({ desde, hasta }: { desde: string; hasta: string
                             )}
                         </div>
                         {d.asientos.map(a => <ResumenAsiento key={a.id} a={a} />)}
+                        <ParaIM hojas={d.hojas.filter(h => enApp.has(h.id)).map(h => ({ numero: h.numero, app: enApp.get(h.id) as RendicionApp }))} />
                     </div>
 
                     {d.hojas.map(h => (
-                        <TarjetaHoja key={h.id} h={h} abierta={abierta === h.id} onToggle={() => setAbierta(x => x === h.id ? null : h.id)} />
+                        <TarjetaHoja key={h.id} h={h} abierta={abierta === h.id} onToggle={() => setAbierta(x => x === h.id ? null : h.id)}
+                            rendible={rendible} app={enApp.get(h.id) ?? null} onGuardado={alGuardar} />
                     ))}
                 </section>
             ))}
@@ -188,7 +240,38 @@ function ResumenAsiento({ a }: { a: Asiento }) {
     );
 }
 
-function TarjetaHoja({ h, abierta, onToggle }: { h: Hoja; abierta: boolean; onToggle: () => void }) {
+/**
+ * Lo que Anto copia en IM para cerrar el día: el asiento con los números de hoja, la diferencia de
+ * caja y una orden de pago por gasto. La API de IM no crea asientos ni órdenes de pago.
+ */
+function ParaIM({ hojas }: { hojas: Array<{ numero: number; app: RendicionApp }> }) {
+    const [copiado, setCopiado] = useState(false);
+    if (!hojas.length) return null;
+    const r = resumenParaIM(hojas.map(h => ({ numero: h.numero, contado: h.app.efectivo_contado, diferencia: h.app.diferencia, gastos: h.app.gastos })));
+    const lineas = [
+        r.asiento ? `Asiento Caja Repartos → Caja Casa Central: "${r.asiento.texto}" ${money(r.asiento.importe)}` : '',
+        r.diferencia ? `Diferencia de caja: ${money(r.diferencia.importe)}` : '',
+        ...r.ops.map(o => `OP "${o.texto}" ${money(o.importe)}`),
+    ].filter(Boolean);
+    async function copiar() {
+        try { await navigator.clipboard.writeText(lineas.join('\n')); setCopiado(true); setTimeout(() => setCopiado(false), 5000); } catch { /* sin portapapeles: se copia a mano */ }
+    }
+    return (
+        <div className="rd-para-im">
+            <div className="rd-para-im-titulo">
+                <b>Para IM</b>
+                {r.faltan_contar.length > 0 && <span className="rd-chip ambar">falta contar {r.faltan_contar.length === 1 ? 'la hoja' : 'las hojas'} {r.faltan_contar.join(', ')}</span>}
+                {lineas.length > 0 && <button type="button" className="rd-btn ghost" onClick={copiar}><Copy size={13} /> {copiado ? 'Copiado' : 'Copiar'}</button>}
+            </div>
+            {lineas.map(l => <span key={l}>{l}</span>)}
+        </div>
+    );
+}
+
+function TarjetaHoja({ h, abierta, onToggle, rendible, app, onGuardado }: {
+    h: Hoja; abierta: boolean; onToggle: () => void; rendible: boolean; app: RendicionApp | null; onGuardado: (r: RendicionApp) => void;
+}) {
+    const [rindiendo, setRindiendo] = useState(false);
     const t = h.totales;
     return (
         <div className={`rd-hoja${abierta ? ' abierta' : ''}`}>
@@ -199,6 +282,7 @@ function TarjetaHoja({ h, abierta, onToggle }: { h: Hoja; abierta: boolean; onTo
                     <span>· {h.chofer ?? 'Sin chofer'}</span>
                     {h.estado === 'cerrada' && <span className="rd-chip gris">cerrada</span>}
                     {h.fecha_corrida && <span className="rd-chip ambar" title={`La hoja dice ${ddmm(h.fecha)}, pero sus recibos son del ${ddmm(h.fecha_efectiva)}`}>fecha corrida: se rindió el {ddmm(h.fecha_efectiva)}</span>}
+                    {app && <span className={`rd-chip ${app.controlado_at ? 'ok' : 'gris'}`}>{app.controlado_at ? 'rendida en la app · controlada' : app.efectivo_contado != null ? 'rendida en la app · contada' : 'rendición en la app'}</span>}
                 </div>
                 <div className="rd-cifras">
                     <span>Entregado <b>{money(t.entregado)}</b></span>
@@ -216,6 +300,14 @@ function TarjetaHoja({ h, abierta, onToggle }: { h: Hoja; abierta: boolean; onTo
 
             {abierta && (
                 <div className="rd-detalle">
+                    {rendible && (
+                        <div className="rd-detalle-acciones">
+                            <button type="button" className={`rd-btn ${rindiendo ? '' : 'ghost'}`} onClick={() => setRindiendo(x => !x)}>
+                                <PencilLine size={14} /> {rindiendo ? 'Ver lo cargado en IM' : 'Rendir en la app'}
+                            </button>
+                        </div>
+                    )}
+                    {rindiendo ? <RendirHoja h={h} onGuardado={onGuardado} /> : (<>
                     <div className="rd-tabla">
                         <div className="rd-fila rd-encabezado">
                             <span>Cliente</span><span>Llevó</span><span>NC</span><span>Saldo ant.</span>
@@ -243,6 +335,7 @@ function TarjetaHoja({ h, abierta, onToggle }: { h: Hoja; abierta: boolean; onTo
                             <ul>{h.gastos.map(g => <li key={g.id}>{g.descripcion.replace(/^\s*Caja Repartos -\s*/i, '')} · {money(g.importe)}</li>)}</ul>
                         </div>
                     )}
+                    </>)}
                 </div>
             )}
         </div>

@@ -1,0 +1,65 @@
+/* Rendir el efectivo de una hoja (etapa 2). Misma paleta que la rendición de la etapa 1. */
+
+.rr-root { display: flex; flex-direction: column; gap: 0.7rem; min-width: 0; }
+.rr-cargando { flex-direction: row; align-items: center; gap: 0.4rem; color: var(--color-text-muted); font-size: 0.85rem; }
+
+.rr-tabla { display: flex; flex-direction: column; }
+.rr-fila {
+    display: grid; grid-template-columns: minmax(160px, 2.2fr) repeat(3, minmax(70px, 1fr)) minmax(110px, 1.2fr) minmax(100px, 1fr);
+    gap: 0.4rem; align-items: center; padding: 0.35rem 0; border-bottom: 1px solid var(--color-border);
+    font-size: 0.83rem; font-variant-numeric: tabular-nums;
+}
+.rr-fila > span:not(.rr-cliente) { text-align: right; }
+.rr-encabezado { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--color-text-muted); font-weight: 600; }
+.rr-encabezado > span:first-child { text-align: left; }
+.rr-cliente { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.rr-cliente small { font-weight: 400; color: var(--color-text-muted); }
+
+.rr-input, .rr-detalle, .rr-gasto select {
+    font-family: inherit; font-size: 0.85rem; padding: 0.3rem 0.45rem; min-width: 0;
+    border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text);
+}
+.rr-input { width: 100%; max-width: 9rem; text-align: right; font-variant-numeric: tabular-nums; }
+
+.rr-gastos { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.85rem; }
+.rr-subtitulo { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rr-gasto { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.rr-detalle { flex: 1 1 10rem; }
+.rr-quitar { border: none; background: transparent; color: var(--color-text-muted); cursor: pointer; padding: 0.2rem; }
+/* `.rd-btn` empuja a la derecha (margin-left: auto) y su hoja de estilos carga después: acá van a la izquierda. */
+.rr-gastos .rr-agregar, .rr-control .rr-controlar { margin-left: 0; }
+.rr-agregar { align-self: flex-start; }
+
+.rr-cuentas {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1.2rem;
+    background: var(--color-surface-hover, #f6f7f4); border-radius: var(--radius-md); padding: 0.55rem 0.75rem;
+    font-size: 0.85rem; color: var(--color-text-muted); font-variant-numeric: tabular-nums;
+}
+.rr-cuentas b { color: var(--color-text); }
+.rr-cuentas label { display: inline-flex; align-items: center; gap: 0.4rem; }
+.rr-diferencia.falta b { color: #A83E2B; }
+.rr-diferencia.sobra b { color: #06652F; }
+
+.rr-control { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; font-size: 0.82rem; }
+.rr-controlado { display: inline-flex; align-items: center; gap: 0.3rem; color: #0B6B34; font-weight: 600; }
+
+.rr-acciones { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rr-acciones .rd-btn { margin-left: 0; }
+.rr-guardar:not(:disabled), .rr-emitir:not(:disabled) { background: #06652F; border-color: #06652F; color: #fff; }
+
+.rr-plan { display: flex; flex-direction: column; gap: 0.3rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.55rem 0.75rem; font-size: 0.82rem; }
+.rr-plan.frenado { border-color: #e0a89e; }
+.rr-paso { display: flex; flex-wrap: wrap; gap: 0.2rem 0.6rem; }
+.rr-paso-cliente { font-weight: 600; }
+.rr-paso.listo > span:last-child { color: #06652F; }
+.rr-paso.salteado > span:last-child, .rr-paso.en_espera > span:last-child { color: #8a5a00; }
+
+/* En el celular cada cliente es una tarjetita: etiqueta a la izquierda, número a la derecha. */
+@media (max-width: 760px) {
+    .rr-encabezado { display: none; }
+    .rr-fila { grid-template-columns: 1fr 1fr; gap: 0.15rem 0.6rem; padding: 0.55rem 0; }
+    .rr-fila > .rr-cliente { grid-column: 1 / -1; }
+    .rr-fila > span:not(.rr-cliente) { display: flex; justify-content: space-between; align-items: center; gap: 0.4rem; }
+    .rr-fila > span:not(.rr-cliente)::before { content: attr(data-l); color: var(--color-text-muted); font-size: 0.74rem; text-align: left; }
+    .rr-input { max-width: 7.5rem; }
+}
