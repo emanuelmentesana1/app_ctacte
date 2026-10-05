@@ -1,6 +1,6 @@
 import { useReparto, useOperacionReparto } from './RepartoContext';
 import { useLecturaVigente } from '../utils/useLecturaVigente';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Save, Trash2, Plus, Search, AlertTriangle, Loader2, X, Truck, Info } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import './EditorPresupuesto.css';
@@ -147,6 +147,13 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
         return () => { vivo = false; };
     }, []);
     const [busqueda, setBusqueda] = useState('');
+    /**
+     * 🔄 05/10/2026: lo ya facturado se suma desde el enlace del buscador. Mati: el cuadro vacío
+     * era "MUY invasivo" y "al pedo". Con el enlace tocado, el producto que se elija entra como ya
+     * facturado: así no termina cobrado por error al tocar el nombre en vez de «ya facturado».
+     */
+    const [modoYaFacturado, setModoYaFacturado] = useState(false);
+    const buscador = useRef<HTMLInputElement>(null);
     const [resultados, setResultados] = useState<ArticuloBuscado[] | null>(null);
     const [buscando, setBuscando] = useState(false);
     const [guardando, setGuardando] = useState(false);
@@ -264,7 +271,7 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
             uid: crypto.randomUUID(), id: null, im_renglon_id: null,
             cod_articulo: a.cod_articulo, descripcion: a.descripcion, cantidad: 1, factura_ref: null, origen: 'app',
         }]);
-        setBusqueda(''); setResultados(null);
+        setBusqueda(''); setResultados(null); setModoYaFacturado(false);
     }
 
     function cambiarPendiente(uid: string, campo: 'cantidad' | 'factura_ref', valor: string) {
@@ -415,8 +422,9 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
 
             {/* ─── Lo que viaja sin cobrarse ──────────────────────────────────────
                 🔑 Mati (01/10/2026): mercadería ya facturada y remitida antes, que va en este
-                camión. No se factura ni descuenta stock: sale en el remito y en la hoja de ruta. */}
-            {(pendientes.length > 0 || pendientesEditables || !!pendientesError) && (
+                camión. No se factura ni descuenta stock: sale en el remito y en la hoja de ruta.
+                🔄 05/10/2026: sólo aparece con algo adentro, o si no se pudo leer la lista. */}
+            {(pendientes.length > 0 || !!pendientesError) && (
                 <div className="ed-pendientes">
                     <div className="ed-pend-titulo" title="No se cobra ni descuenta stock: va al camión y al remito">
                         <Truck size={14} /> <b>Lleva además, ya facturado</b> <Info size={13} className="ed-ayuda" />
@@ -424,7 +432,6 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                     {pendientesError && <div className="ed-aviso error"><AlertTriangle size={14} /><span>{pendientesError}</span></div>}
                     {!!pendientes.length && (
                         <table className="ed-tabla ed-pend-tabla">
-                            <thead><tr><th>Producto</th><th className="n">Cantidad</th><th>Factura</th><th /></tr></thead>
                             <tbody>
                                 {pendientes.map(p => (
                                     <tr key={p.uid} className={p.origen === 'im' ? 'ed-pend-im' : ''}>
@@ -455,28 +462,27 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                             </tbody>
                         </table>
                     )}
-                    {!pendientes.length && pendientesEditables && (
-                        <div className="ed-sinres">Nada. Para sumar mercadería ya facturada, buscala abajo y tocá «ya facturado».</div>
-                    )}
                 </div>
             )}
 
             {/* ─── Agregar un producto ────────────────────────────────────────── */}
             <div className="ed-agregar">
-                <div className="ed-buscar">
-                    <Search size={14} />
-                    <input type="text" value={busqueda} placeholder="Agregar un producto: escribí parte del nombre o el código"
+                <div className={`ed-buscar${modoYaFacturado ? ' ya-facturado' : ''}`}>
+                    {modoYaFacturado ? <Truck size={14} /> : <Search size={14} />}
+                    <input ref={buscador} type="text" value={busqueda}
+                           placeholder={modoYaFacturado ? 'Ya facturado (no se cobra): escribí parte del nombre o el código' : 'Agregar un producto: escribí parte del nombre o el código'}
                            onChange={e => { invalidarBusqueda(); setResultados(null); setBuscando(false); setBusqueda(e.target.value); }}
                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void buscar(); } }} />
                     <button className="ed-btn ghost chico" onClick={() => void buscar()} disabled={buscando || busqueda.trim().length < 2}>
                         {buscando ? <Loader2 size={13} className="ed-girando" /> : <Search size={13} />} Buscar
                     </button>
                     {resultados && (
-                        <button className="ed-icono" title="Cerrar los resultados" onClick={() => { invalidarBusqueda(); setBuscando(false); setResultados(null); setBusqueda(''); }}>
+                        <button className="ed-icono" title="Cerrar los resultados" onClick={() => { invalidarBusqueda(); setBuscando(false); setResultados(null); setBusqueda(''); setModoYaFacturado(false); }}>
                             <X size={14} />
                         </button>
                     )}
                 </div>
+                <div className="ed-agregar-mas">
                 {/* 🔑 El costo de distribución es el artículo 13819 y su precio se escribe a mano:
                     no sale de ninguna lista (Mati, 09/09/2026). */}
                 <button className="ed-btn ghost chico ed-libre-btn"
@@ -489,18 +495,26 @@ export function EditorPresupuesto({ comprobanteId, numero, huellaOriginal, items
                         }])}>
                     <Plus size={13} /> Agregar costo de distribución
                 </button>
+                {pendientesEditables && (
+                    <button type="button" className="ed-link" aria-pressed={modoYaFacturado}
+                            title="Mercadería ya facturada que viaja con este pedido: no se cobra ni descuenta stock"
+                            onClick={() => { setModoYaFacturado(v => !v); buscador.current?.focus(); }}>
+                        {modoYaFacturado ? 'cancelar ya facturado' : '+ sumar ya facturado'}
+                    </button>
+                )}
+                </div>
                 {resultados && (
                     <div className="ed-resultados">
                         {!resultados.length && <div className="ed-sinres">No encontré nada con eso.</div>}
                         {resultados.map(a => (
                             <div key={a.cod_articulo} className="ed-res-fila">
-                                <button className="ed-res" onClick={() => agregar(a)}>
-                                    <Plus size={13} />
+                                <button className="ed-res" onClick={() => modoYaFacturado ? agregarPendiente(a) : agregar(a)}>
+                                    {modoYaFacturado ? <Truck size={13} /> : <Plus size={13} />}
                                     <span>{a.descripcion}</span>
                                     <small>#{a.cod_articulo}{a.precio_venta != null ? ` · ${money(a.precio_venta)}` : ''}</small>
                                 </button>
                                 {/* El mismo buscador sirve para lo que viaja sin cobrarse. */}
-                                {pendientesEditables && (
+                                {pendientesEditables && !modoYaFacturado && (
                                     <button className="ed-btn ghost chico ed-res-pend" title="Mercadería ya facturada que viaja con este pedido: no se cobra"
                                             onClick={() => agregarPendiente(a)}>
                                         <Truck size={12} /> ya facturado

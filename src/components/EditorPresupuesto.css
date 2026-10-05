@@ -105,6 +105,15 @@
 }
 .ed-tag.libre { background: var(--color-accent); color: #4a3600; }
 .ed-libre-btn { align-self: flex-start; }
+/* 🔄 05/10/2026: el costo de distribución y «+ sumar ya facturado», en una línea abajo del buscador. */
+.ed-agregar-mas { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.ed-link {
+    border: none; background: transparent; padding: 0.1rem 0.2rem; cursor: pointer;
+    font-family: inherit; font-size: 0.78rem; color: var(--color-text-muted); text-decoration: underline dotted;
+}
+.ed-link:hover, .ed-link[aria-pressed="true"] { color: #8a5a00; }
+/* Con el enlace tocado, el buscador se pinta como el cuadro de lo ya facturado. */
+.ed-buscar.ya-facturado { border-color: #EEC045; background: rgba(238, 192, 69, 0.07); }
 
 /* Las observaciones del presupuesto: lo que lee quien factura y quien entrega. */
 .ed-obs {
@@ -135,15 +144,16 @@
 /* Lo que viaja sin cobrarse (01/10/2026): mercadería ya facturada que va en este camión. Aparte de
    los renglones, con borde punteado: no suma al total ni se factura. */
 .ed-pendientes {
-    display: flex; flex-direction: column; gap: 0.35rem;
-    border: 1px dashed #EEC045; border-radius: var(--radius-md); padding: 0.45rem 0.55rem;
+    display: flex; flex-direction: column; gap: 0.2rem;
+    border: 1px dashed #EEC045; border-radius: var(--radius-md); padding: 0.3rem 0.5rem;
     background: rgba(238, 192, 69, 0.07);
 }
 .ed-pend-titulo { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; font-size: 0.82rem; color: var(--color-text); }
 .ed-pend-titulo span { color: var(--color-text-muted); font-size: 0.76rem; }
 /* La explicación del bloque, a un toque (04/10/2026): antes era una línea fija más. */
 .ed-pend-titulo .ed-ayuda { color: var(--color-text-muted); cursor: help; }
-.ed-pend-tabla td { border-bottom-style: dotted; }
+.ed-pend-tabla td { border-bottom-style: dotted; padding: 0.15rem 0.4rem; }
+.ed-pend-tabla tr:last-child td { border-bottom: none; }
 .ed-tag-im {
     margin-left: 0.35rem; border: 1px solid var(--color-border); color: var(--color-text-muted);
     padding: 0.02rem 0.35rem; border-radius: 999px; font-size: 0.65rem; font-weight: 600; white-space: nowrap;

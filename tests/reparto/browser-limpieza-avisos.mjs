@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import {browser,results,out,row,reply,presupuestos,setup,assert,test} from './browser-fixtures.mjs';
+import {browser,results,out,row,item,reply,presupuestos,setup,assert,test} from './browser-fixtures.mjs';
 
 /**
  * LA LIMPIEZA DE AVISOS (04/10/2026). Mati: *"siento que todavía hay demasiados carteles, avisos y
@@ -87,6 +87,41 @@ try {
       await error.waitFor();
       await page.waitForTimeout(6000);
       assert(await error.isVisible(), 'El error se fue solo: nadie lo llegó a leer');
+    } finally { await ctx.close(); }
+  });
+
+  await test('🔴 Editor: vacío, "ya facturado" no ocupa lugar; el enlace del buscador lo suma y el cuadro queda compacto', async () => {
+    // Mati (05/10/2026): el cuadro vacío era "MUY invasivo" y "al pedo".
+    const vacio = { items: [item(11, 'PRODUCTO ALFA')], pendientes: [], pendientes_disponibles: true, pendientes_error: null,
+      comprobante: { im_comprobante_id: '101', numero: 101, cod_cliente: 101, cliente_nombre: 'CLIENTE ALFA', fecha: '2026-09-10', huella: 'v101' } };
+    const { page, ctx } = await setup(1440, { beforeGoto: async p => {
+      conPresupuestos([row('101', 'CLIENTE ALFA')])(p);
+      await p.route('**/api/presupuestos/101', r => reply(r, vacio));
+      await p.route('**/api/articulos/buscar?**', r => reply(r, { ok: true, articulos: [{ cod_articulo: 491, descripcion: 'MEZCLA GALLO PREMIUM', unidad_de_medida: null, equivalencia_um: 1, precio_venta: 1330 }] }));
+    } });
+    try {
+      await page.locator('.pr-abrir').first().click();
+      const editor = page.locator('.pr-detalle');
+      await editor.locator('.ed-buscar').waitFor();
+      assert(await editor.locator('.ed-pendientes').count() === 0, 'El cuadro de lo ya facturado aparece vacío');
+      assert(!/Para sumar mercadería ya facturada/.test(await editor.innerText()), 'Sigue la explicación del cuadro vacío');
+      await editor.screenshot({ path: `${out}/editor-ya-facturado-vacio.png` });
+      await editor.getByRole('button', { name: /sumar ya facturado/ }).click();
+      const buscador = editor.locator('.ed-buscar input');
+      assert(/ya facturado/i.test(await buscador.getAttribute('placeholder') ?? ''), 'El buscador no avisa que lo que se elija va como ya facturado');
+      await buscador.fill('gallo');
+      await buscador.press('Enter');
+      await editor.locator('.ed-res', { hasText: 'MEZCLA GALLO PREMIUM' }).waitFor();
+      await editor.screenshot({ path: `${out}/editor-ya-facturado-buscando.png` });
+      await editor.locator('.ed-res', { hasText: 'MEZCLA GALLO PREMIUM' }).click();
+      // 🔴 Entra como ya facturado, nunca como un renglón que se cobra.
+      await editor.locator('.ed-pend-tabla').waitFor();
+      assert(/MEZCLA GALLO PREMIUM/.test(await editor.locator('.ed-pend-tabla').innerText()), 'No entró como ya facturado');
+      assert(!/MEZCLA GALLO PREMIUM/.test(await editor.locator('.ed-tabla:not(.ed-pend-tabla)').innerText()), 'Entró como un renglón que se cobra');
+      assert(await editor.locator('.ed-pend-tabla thead').count() === 0, 'Con renglones sigue la fila de títulos: no quedó compacto');
+      await editor.screenshot({ path: `${out}/editor-ya-facturado-compacto.png` });
+      // Y el modo se apaga: lo próximo que se busque vuelve a ser un producto que se cobra.
+      assert(!/ya facturado/i.test(await buscador.getAttribute('placeholder') ?? ''), 'El buscador quedó en modo "ya facturado"');
     } finally { await ctx.close(); }
   });
 
