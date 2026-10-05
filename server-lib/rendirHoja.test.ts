@@ -92,13 +92,20 @@ function res() {
 }
 const guardar = async (user: any, body: Record<string, unknown>) => { const r = res(); await guardarRendicion(req(user, body), r); return r; };
 
+const HOJA_FUERA = '11111111-2222-3333-4444-666666666666';
+
 beforeEach(() => {
   delete process.env.RENDICION_TOPE;
+  // Cada test arranca SIN piloto; los que emiten prenden la hoja 3449 a mano.
+  process.env.RENDICION_PILOTO_HOJAS = '';
   m.errores = {};
   m.tablas = {
     hojas_ruta: [{
       id: HOJA, tenant_id: 't', numero: 3449, fecha: '2026-10-05', estado: 'abierta', choferes: { nombre: 'VICTOR' },
       hojas_ruta_pedidos: [{ cod_cliente: 722, cliente_nombre: 'PEREZ' }, { cod_cliente: 815, cliente_nombre: 'GOMEZ' }],
+    }, {
+      id: HOJA_FUERA, tenant_id: 't', numero: 3450, fecha: '2026-10-05', estado: 'abierta', choferes: { nombre: 'NIÑO' },
+      hojas_ruta_pedidos: [{ cod_cliente: 722, cliente_nombre: 'PEREZ' }],
     }],
     usuarios: [{ id: 'u-anto', nombre: 'Anto' }, { id: 'u-maca', nombre: 'Maca' }],
     rendiciones: [],
@@ -194,7 +201,7 @@ describe('emitir los recibos de efectivo', () => {
     expect(m.aprobar).not.toHaveBeenCalled();
   });
 
-  it('🔴 sin el sí de Mati (tope en 0) no se emite nada', async () => {
+  it('🔴 sin hojas en el piloto no se emite nada', async () => {
     const r = res();
     await emitirRendicion(req(ANTO, { accion: 'emitir' }), r);
     expect(r.statusCode).toBe(403);
@@ -203,7 +210,7 @@ describe('emitir los recibos de efectivo', () => {
   });
 
   it('🔑 con el piloto activo: un recibo por cliente, a Caja Repartos, con la fecha de la hoja y por el motor de siempre', async () => {
-    process.env.RENDICION_TOPE = '20';
+    process.env.RENDICION_PILOTO_HOJAS = '3449';
     const r = res();
     await emitirRendicion(req(ANTO, { accion: 'emitir' }), r);
     expect(r.statusCode).toBe(200);
@@ -218,7 +225,7 @@ describe('emitir los recibos de efectivo', () => {
   });
 
   it('🔴 si otra persona ya está emitiendo ese cliente, choca en la base y NO llega a IM', async () => {
-    process.env.RENDICION_TOPE = '20';
+    process.env.RENDICION_PILOTO_HOJAS = '3449';
     // Otra pestaña lo inserta mientras este pedido consulta IM: el plan ya se armó sin verlo.
     m.getV2.mockImplementationOnce(async () => {
       m.tablas.comprobantes_pago.push({ id: 'otro', tenant_id: 't', hoja_id: HOJA, cod_cliente: 722, monto: 412_300, medio_pago: 'efectivo', status: 'error' });
@@ -232,7 +239,7 @@ describe('emitir los recibos de efectivo', () => {
   });
 
   it('si IM rechaza uno, queda marcado con el motivo y la tanda se frena ahí', async () => {
-    process.env.RENDICION_TOPE = '20';
+    process.env.RENDICION_PILOTO_HOJAS = '3449';
     await guardar(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300 }, { cod_cliente: 815, importe: 50_000 }], version: 1 });
     m.aprobar.mockImplementationOnce(async (_rq: any, rs: any) => { rs.status(409).json({ ok: false, error: 'La factura FA1 ya no está pendiente' }); });
     const r = res();
@@ -252,3 +259,27 @@ describe('saldo del mes por repartidor', () => {
     expect(r.body.saldos).toEqual([{ chofer: 'VICTOR', hojas: 1, contadas: 1, saldo: -300, sin_controlar: 1 }]);
   });
 });
+
+describe('piloto (Mati, 05/10/2026: "sí al piloto" con una hoja)', () => {
+  it('🔑 por defecto el piloto es la hoja 3449: ésa puede emitir', async () => {
+    delete process.env.RENDICION_PILOTO_HOJAS;
+    const r = res();
+    await rendicionDeHoja(req(ANTO), r);
+    expect(r.body.emision).toMatchObject({ piloto: [3449] });
+    expect(r.body.emision.tope).toBeGreaterThan(0);
+  });
+
+  it('🔴 una hoja fuera del piloto no emite, aunque tenga su rendición guardada', async () => {
+    process.env.RENDICION_PILOTO_HOJAS = '3449';
+    const g = res();
+    await guardarRendicion(req(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300 }] }, { params: { id: HOJA_FUERA } }), g);
+    expect(g.statusCode).toBe(200);
+    expect(g.body.emision).toMatchObject({ tope: 0, piloto: [3449] });
+    const r = res();
+    await emitirRendicion(req(ANTO, { accion: 'emitir' }, { params: { id: HOJA_FUERA } }), r);
+    expect(r.statusCode).toBe(403);
+    expect(r.body.error).toMatch(/3449/);
+    expect(m.aprobar).not.toHaveBeenCalled();
+  });
+});
+

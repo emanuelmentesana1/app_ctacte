@@ -33,7 +33,7 @@ interface Rendicion {
     lo_conto_quien_pregunta: boolean;
     cuentas: { efectivo: number; gastos: number; debe_entregar: number; contado: number | null; diferencia: number | null };
 }
-interface Detalle { ok: true; falta_migracion?: boolean; mensaje?: string; rendicion: Rendicion | null; recibos: ReciboApp[]; emision: { tope: number; cuenta: string } }
+interface Detalle { ok: true; falta_migracion?: boolean; mensaje?: string; rendicion: Rendicion | null; recibos: ReciboApp[]; emision: { tope: number; cuenta: string; piloto?: number[] } }
 interface Paso {
     cod_cliente: number; importe: number; estado: 'emitido' | 'listo' | 'salteado' | 'en_espera'; motivo?: string;
     comprobantes?: { id: string; importe_a_pagar: number; etiqueta?: string; fecha?: string | null }[]; recibo_im?: string | null;
@@ -155,6 +155,7 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
     const nombre = (cod: number) => h.filas.find(f => f.cod_cliente === cod)?.cliente ?? `Cliente ${cod}`;
     const emitidos = detalle?.recibos.filter(x => x.status === 'imputado').length ?? 0;
     const tope = detalle?.emision.tope ?? 0;
+    const piloto = detalle?.emision.piloto ?? [];
     const listos = plan?.filter(p => p.estado === 'listo').length ?? 0;
     const gastosIM = h.gastos.reduce((s, g) => s + g.importe, 0);
     const puedeControlar = r?.efectivo_contado != null && !r.lo_conto_quien_pregunta && !r.controlado_por && !sinGuardar && !ocupado;
@@ -164,7 +165,7 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
             {/* Un aviso por pantalla (regla de la oficina, 04/10): primero el error; si no, lo que frena. */}
             {error
                 ? <div className="rd-aviso error"><AlertTriangle size={14} /> {error}</div>
-                : emitidos > 0 && <div className="rd-aviso"><AlertTriangle size={14} /> Esta hoja se rinde en la app: no cargues sus recibos de efectivo en IM.</div>}
+                : (emitidos > 0 || tope > 0) && <div className="rd-aviso"><AlertTriangle size={14} /> Esta hoja se rinde en la app: no cargues sus recibos de efectivo en IM.</div>}
             <AvisoTemporal texto={listo} onCerrar={() => setListo(null)} />
 
             <div className="rr-tabla">
@@ -264,7 +265,9 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
                     <Send size={14} /> Emitir {listos || ''} {listos === 1 ? 'recibo' : 'recibos'}
                 </button>
                 {tope === 0 && (
-                    <span className="rd-info rr-emision-apagada" title="La emisión desde la app se activa con el sí de Mati (piloto). Mientras tanto esta hoja se sigue cargando en IM como siempre.">
+                    <span className="rd-info rr-emision-apagada" title={piloto.length
+                        ? `La emisión desde la app está en piloto con la hoja ${piloto.join(', ')}. Esta hoja se sigue cargando en IM como siempre.`
+                        : 'La emisión desde la app no está activada: hace falta el sí de Mati. Esta hoja se sigue cargando en IM como siempre.'}>
                         <Info size={13} /> Emisión apagada
                     </span>
                 )}

@@ -11,7 +11,8 @@
  * Cobranzas (pre-chequeo contra IM, ajuste de centavos, usuario de quien aprueba), con Caja Repartos
  * fijada por el servidor. Qué entra y cómo se imputa vive en `rendicionEfectivo.ts` (puro, con tests).
  *
- * 🔴 Mati: nada se escribe en IM sin su sí ⇒ `RENDICION_TOPE` arranca en 0: sólo vista previa.
+ * 🔴 Mati: nada se escribe en IM sin su sí. El 05/10/2026 dio el sí al piloto con UNA hoja: la emisión se
+ * prende sólo para las hojas de `RENDICION_PILOTO_HOJAS`; las demás tienen vista previa y nada más.
  * 🪤 Sin la migración 056 no hay dónde guardar: todo contesta `falta_migracion` y la pantalla queda
  * en sólo lectura, como en la etapa 1.
  */
@@ -34,8 +35,15 @@ import type { FacturaParaImputar } from '../src/utils/aprobacionRecibos.js';
 const CUENTA_CAJA_REPARTOS = process.env.IM_CUENTA_CAJA_REPARTOS || '1110009';
 /** El reparto es de Casa Central. */
 const EMPRESA = 1;
-/** Recibos por tanda. 0 = emisión apagada (sólo vista previa) hasta el sí de Mati al piloto. */
-const tope = () => Math.max(0, Number(process.env.RENDICION_TOPE ?? 0) || 0);
+/**
+ * 🔴 Piloto (Mati, 05/10/2026: "sí al piloto" con una hoja). La emisión se prende SÓLO para estas hojas, y
+ * cada una se rinde en la app y NO a mano en IM. `RENDICION_PILOTO_HOJAS`: números separados por coma
+ * (vacío = ninguna). La primera: la 3449 (VICTOR, 05/10), que Anto rinde el 06/10.
+ */
+const hojasPiloto = () => String(process.env.RENDICION_PILOTO_HOJAS ?? '3449').split(',')
+    .map(x => Number(x.trim())).filter(n => Number.isInteger(n) && n > 0);
+/** Recibos por tanda en una hoja del piloto; 0 fuera del piloto (sólo vista previa). */
+const tope = (numeroHoja: number) => (hojasPiloto().includes(numeroHoja) ? Math.max(0, Number(process.env.RENDICION_TOPE ?? 30) || 0) : 0);
 
 const SIN_MIGRACION = new Set(['42P01', 'PGRST205', '42703', 'PGRST204']);
 const MSJ_SIN_MIGRACION = 'Falta aplicar la migración 056 (rendición del efectivo) en la base: la rendición sigue en sólo lectura.';
@@ -123,7 +131,7 @@ async function respuesta(user: JwtPayload, hoja: FilaHoja, rend: FilaRendicion |
             cuentas: cuentasDeLaRendicion(b),
         } : null,
         recibos,
-        emision: { tope: tope(), cuenta: CUENTA_CAJA_REPARTOS },
+        emision: { tope: tope(hoja.numero), cuenta: CUENTA_CAJA_REPARTOS, piloto: hojasPiloto() },
     };
 }
 
@@ -308,14 +316,17 @@ export async function emitirRendicion(req: Request & { user?: JwtPayload }, res:
         if (hoja.estado === 'anulada') throw new NoSePuede('La hoja está anulada.');
         const rend = await leerRendicion(hoja.id);
         if (!rend) throw new NoSePuede('Primero guardá lo cobrado por cliente.');
-        if (accion === 'emitir' && tope() === 0) {
-            throw new NoSePuede('La emisión desde la app todavía no está activada: falta el sí de Mati para el piloto. No se emitió nada.', 403);
+        if (accion === 'emitir' && tope(hoja.numero) === 0) {
+            const piloto = hojasPiloto();
+            throw new NoSePuede(piloto.length
+                ? `La emisión desde la app está en piloto sólo con la hoja ${piloto.join(', ')}. Esta hoja se carga en IM como siempre. No se emitió nada.`
+                : 'La emisión desde la app no está activada. No se emitió nada.', 403);
         }
         const existentes = await recibosDeLaHoja(hoja.id);
         const efectivo = aBorrador(rend).efectivo;
         // La vista previa muestra la imputación de todos aunque la emisión esté apagada.
-        const { plan, imConsultado } = await planDeLaHoja(hoja, efectivo, existentes, accion === 'plan' ? Math.max(tope(), efectivo.length) : tope());
-        if (accion === 'plan') { res.json({ ok: true, plan, tope: tope(), fecha: hoja.fecha, cuenta: CUENTA_CAJA_REPARTOS, consultado: { im: imConsultado } }); return; }
+        const { plan, imConsultado } = await planDeLaHoja(hoja, efectivo, existentes, accion === 'plan' ? Math.max(tope(hoja.numero), efectivo.length) : tope(hoja.numero));
+        if (accion === 'plan') { res.json({ ok: true, plan, tope: tope(hoja.numero), fecha: hoja.fecha, cuenta: CUENTA_CAJA_REPARTOS, consultado: { im: imConsultado } }); return; }
 
         // Emitir: uno por uno, y se frena en el primer problema (mismo criterio que el lote de Cobranzas).
         const resultados: Array<{ cod_cliente: number; ok: boolean; recibo_id?: string | null; error?: string }> = [];
@@ -326,7 +337,7 @@ export async function emitirRendicion(req: Request & { user?: JwtPayload }, res:
             if (!r.ok) { frenado = true; break; }
         }
         console.log(`[rendir] hoja ${hoja.numero}: ${user.sub} emitió ${resultados.filter(x => x.ok).length} de ${resultados.length}${frenado ? ' (frenado)' : ''}`);
-        res.json({ ok: true, plan, resultados, frenado, tope: tope() });
+        res.json({ ok: true, plan, resultados, frenado, tope: tope(hoja.numero) });
     } catch (e) { fallar(res, e, 'emitir'); }
 }
 

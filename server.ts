@@ -717,7 +717,7 @@ app.get('/api/choferes', requireJwt, (req: any, res) => listarChoferes(req, res)
 app.get('/api/liquidacion', requireJwt, (req: any, res) => liquidacionMensual(req, res));
 // La rendición de las hojas, sólo lectura (etapa 1, 04/10/2026): lo cobrado contra lo entregado y el cuadre con IM.
 app.get('/api/rendiciones', requireJwt, (req: any, res) => rendicionesDelRango(req, res));
-// Rendir el efectivo de la hoja en la app (etapa 2, 05/10/2026). La emisión arranca apagada (RENDICION_TOPE=0).
+// Rendir el efectivo de la hoja en la app (etapa 2, 05/10/2026). Emite sólo en las hojas del piloto (RENDICION_PILOTO_HOJAS).
 app.get('/api/rendiciones/saldos', requireJwt, (req: any, res) => saldosDelMes(req, res));
 app.get('/api/rendiciones/hoja/:id', requireJwt, (req: any, res) => rendicionDeHoja(req, res));
 app.put('/api/rendiciones/hoja/:id', requireJwt, (req: any, res) => guardarRendicion(req, res));

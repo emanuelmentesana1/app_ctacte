@@ -58,7 +58,7 @@ async function abrir(width, { datosRango = rango(), detalle = sinRendicion } = {
         pedidos.push({ metodo: r.method(), ruta: new URL(r.url()).pathname, cuerpo });
         if (r.method() === 'GET') return reply(route, detalle);
         if (r.method() === 'PUT') return reply(route, conRendicion({ efectivo: cuerpo.efectivo, gastos: cuerpo.gastos, efectivo_contado: cuerpo.efectivo_contado }));
-        if (r.url().endsWith('/emitir')) return reply(route, plan);
+        if (r.url().endsWith('/emitir')) return reply(route, cuerpo?.accion === 'emitir' ? { ...plan, resultados: [{ cod_cliente: 101, ok: true, recibo_id: '59100001' }], frenado: false } : plan);
         if (r.url().endsWith('/controlar')) return reply(route, conRendicion({ controlado_por: 'Maca', controlado_at: '2026-10-06T13:00:00Z', lo_conto_quien_pregunta: false }));
         return reply(route, { error: 'no simulado' }, 500);
       });
@@ -114,6 +114,35 @@ try {
       assert(await emitir.isDisabled(), 'Emitir está habilitado sin el sí de Mati');
       assert(/Mati/.test(await page.locator('.rr-emision-apagada').getAttribute('title') ?? ''), 'El ⓘ no explica por qué no se puede emitir');
       assert(!pedidos.some(p => p.cuerpo?.accion === 'emitir'), 'Mandó a emitir');
+    } finally { await ctx.close(); }
+  });
+
+  await test('Rendir: en la hoja del piloto avisa que no se carga en IM y emite tras confirmar', async () => {
+    const piloto = conRendicion();
+    const { page, ctx, pedidos } = await abrir(1440, { detalle: { ...piloto, emision: { tope: 30, cuenta: '1110009', piloto: [3449] } } });
+    try {
+      await abrirRendir(page);
+      const aviso = await page.locator('.rr-root .rd-aviso').innerText();
+      assert(/se rinde en la app/i.test(aviso) && /IM/.test(aviso), `No avisa que esta hoja no se carga en IM: ${aviso}`);
+      await page.locator('button.rr-vista').click();
+      await page.locator('.rr-plan').waitFor();
+      const emitir = page.locator('button.rr-emitir');
+      assert(await emitir.isEnabled(), 'En la hoja del piloto, Emitir tendría que estar habilitado');
+      let pregunta = '';
+      page.once('dialog', d => { pregunta = d.message(); d.accept(); });
+      await emitir.click();
+      await page.locator('.rr-plan', { hasText: 'recibos emitidos' }).waitFor();
+      assert(/Caja Repartos/.test(pregunta) && /05\/10/.test(pregunta), `La confirmación no dice caja y fecha: ${pregunta}`);
+      assert(pedidos.some(p => p.cuerpo?.accion === 'emitir'), 'No mandó a emitir');
+    } finally { await ctx.close(); }
+  });
+
+  await test('Rendir: una hoja fuera del piloto dice cuál es la hoja del piloto', async () => {
+    const { page, ctx } = await abrir(1440, { detalle: { ...conRendicion(), emision: { tope: 0, cuenta: '1110009', piloto: [3448] } } });
+    try {
+      await abrirRendir(page);
+      assert(/3448/.test(await page.locator('.rr-emision-apagada').getAttribute('title') ?? ''), 'El ⓘ no dice qué hoja está en el piloto');
+      assert(await page.locator('.rr-root .rd-aviso').count() === 0, 'Fuera del piloto no tiene que aparecer el aviso de "no cargues en IM"');
     } finally { await ctx.close(); }
   });
 
