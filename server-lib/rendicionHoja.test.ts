@@ -86,6 +86,31 @@ describe('armarRendiciones — por cliente', () => {
         expect(r.hojas[0].totales.sin_cobro).toBe(1);
     });
 
+    it('🔑 lo que no salió (botón «No salió» de Repartos) no es entregado ni "sin cobro", igual que en la Liquidación', () => {
+        const r = base({
+            hojas: [hoja(3423, '2026-09-21', [
+                pedido(101, 100_000, { no_salio: true, notas: [{ tipo: 'NC', total: -10_000 }] }),
+                pedido(102, 80_000),
+                pedido(103, 50_000, { no_salio: true }), pedido(103, 30_000, { im_comprobante_id: 'otro' }),
+            ])],
+            recibosIM: [efectivo(1, 103, '2026-09-21', 30_000)],
+        });
+        const [a, b, c] = r.hojas[0].filas;
+        // Las notas de la entrega que no salió tampoco cuentan (la Liquidación las saca igual).
+        expect(a).toMatchObject({ llevo: 0, nc: 0, entregado: 0, estado: 'no_salio', no_salieron: 1 });
+        expect(b.estado).toBe('sin_cobro');
+        expect(c).toMatchObject({ llevo: 30_000, entregado: 30_000, estado: 'pago', no_salieron: 1 });
+        expect(r.hojas[0].totales).toMatchObject({ entregado: 110_000, sin_cobro: 1, no_salio: 1 });
+    });
+
+    it('si no salió pero el cliente igual pagó (deuda vieja), el cobro se ve', () => {
+        const r = base({
+            hojas: [hoja(3423, '2026-09-21', [pedido(101, 100_000, { no_salio: true })])],
+            recibosIM: [efectivo(1, 101, '2026-09-21', 40_000)],
+        });
+        expect(r.hojas[0].filas[0]).toMatchObject({ entregado: 0, efectivo: 40_000, estado: 'de_mas' });
+    });
+
     it('un cliente con dos remitos en la hoja es UNA fila (el papel agrupa por cliente)', () => {
         const r = base({ hojas: [hoja(3423, '2026-09-21', [pedido(101, 100_000), pedido(101, 50_000, { im_comprobante_id: 'otro' })])] });
         expect(r.hojas[0].filas).toHaveLength(1);

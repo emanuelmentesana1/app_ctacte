@@ -15,7 +15,7 @@ import type { Request, Response } from 'express';
 import { sb, TENANT_ID } from './supabase.js';
 import type { JwtPayload } from './auth.js';
 import { puedeArmarHojasDeRuta } from './permisos.js';
-import { leerPaginas, enriquecerHojas, notasDeHojas } from './repartoDatos.js';
+import { leerPaginas, enriquecerHojas, notasDeHojas, entregaNoSalio } from './repartoDatos.js';
 import { imClient, imGetRetry, fechaArgentina } from './infomanager.js';
 import { getV2, imV2Configurada } from './imApiV2.js';
 import { armarRendiciones, type HojaIn, type ReciboIMIn, type MovMayorIn, type TransferenciaIn } from './rendicionHoja.js';
@@ -96,6 +96,8 @@ export async function rendicionesDelRango(req: Request & { user?: JwtPayload }, 
       pedidos: ((conNotas.get(String(h.id)) ?? []) as FilaPedido[]).map(p => ({
         im_comprobante_id: String(p.im_comprobante_id), cod_cliente: Number(p.cod_cliente), cliente_nombre: p.cliente_nombre ?? null,
         total: Number(p.total ?? 0), saldo_anterior: p.saldo_anterior == null ? null : Number(p.saldo_anterior), notas: p.notas ?? [],
+        // El mismo criterio que la Liquidación (Repartos, migración 057).
+        no_salio: entregaNoSalio(p),
       })),
     }));
 

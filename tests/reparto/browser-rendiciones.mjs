@@ -88,6 +88,20 @@ try {
     } finally { await ctx.close(); }
   });
 
+  await test('Rendiciones: lo marcado «No salió» se ve aparte y no como "sin cobro"', async () => {
+    const noSalio = fila(104, 'CLIENTE DELTA', { llevo: 0, entregado: 0, efectivo: 0, recibos_efectivo: [], cobrado: 0, queda: 0, estado: 'no_salio', no_salieron: 1 });
+    const h = hoja(3423, 'VICTOR', [fila(101, 'CLIENTE ALFA'), noSalio]);
+    h.totales.no_salio = 1;
+    const { page, ctx } = await abrir(1440, respuesta({ hojas: [h] }));
+    try {
+      const tarjeta = page.locator('.rd-hoja', { hasText: '3423' });
+      assert(/1 no salió/.test(await tarjeta.locator('.rd-estados').innerText()), 'La hoja no dice cuántas entregas no salieron');
+      await tarjeta.locator('.rd-hoja-head').click();
+      const f = tarjeta.locator('.rd-fila', { hasText: 'CLIENTE DELTA' });
+      assert(/No salió/.test(await f.innerText()) && !/sin cobro/i.test(await f.innerText()), `La fila no dice "No salió": ${await f.innerText()}`);
+    } finally { await ctx.close(); }
+  });
+
   await test('Rendiciones: es sólo lectura — no ofrece emitir, cerrar ni aprobar', async () => {
     const { page, ctx } = await abrir(1440, respuesta());
     try {

@@ -21,18 +21,18 @@ import './RendicionesView.css';
  * frena; lo informativo va a un ⓘ, con una línea corta y el detalle en el `title`.
  */
 
-type Estado = 'pago' | 'parcial' | 'de_mas' | 'sin_cobro';
+type Estado = 'pago' | 'parcial' | 'de_mas' | 'sin_cobro' | 'no_salio';
 interface Fila {
     cod_cliente: number; cliente: string; llevo: number; nc: number; nd: number; entregado: number; saldo_anterior: number;
     efectivo: number; recibos_efectivo: { id_recibo: string; numero: string | null; fecha: string; importe: number }[];
     transferencias: { id: string; monto: number; medio: string | null; status: string; fecha: string; quien: string | null; nombre: string | null }[];
-    cobrado: number; queda: number; estado: Estado; compartido: boolean;
+    cobrado: number; queda: number; estado: Estado; compartido: boolean; no_salieron?: number;
 }
 interface Gasto { id: string; fecha: string; importe: number; descripcion: string }
 interface Hoja {
     id: string; numero: number; fecha: string; estado: string; chofer: string | null; nombre: string | null;
     fecha_efectiva: string; fecha_corrida: boolean; filas: Fila[]; gastos: Gasto[];
-    totales: { clientes: number; llevo: number; nc: number; entregado: number; efectivo: number; transferencias: number; cobrado: number; gastos: number; debe_entregar: number; sin_cobro: number; parcial: number; de_mas: number };
+    totales: { clientes: number; llevo: number; nc: number; entregado: number; efectivo: number; transferencias: number; cobrado: number; gastos: number; debe_entregar: number; sin_cobro: number; parcial: number; de_mas: number; no_salio?: number };
     asiento_id: string | null;
 }
 interface Asiento {
@@ -58,6 +58,7 @@ const ESTADO: Record<Estado, { texto: string; clase: string }> = {
     parcial: { texto: 'Pagó parte', clase: 'ambar' },
     de_mas: { texto: 'Pagó de más', clase: 'verde' },
     sin_cobro: { texto: 'Sin cobro', clase: 'rojo' },
+    no_salio: { texto: 'No salió', clase: 'gris' },
 };
 
 export function RendicionesView({ desde, hasta }: { desde: string; hasta: string }) {
@@ -295,6 +296,7 @@ function TarjetaHoja({ h, abierta, onToggle, rendible, app, onGuardado }: {
                     {t.sin_cobro > 0 && <span className="rd-chip rojo">{t.sin_cobro} sin cobro</span>}
                     {t.parcial > 0 && <span className="rd-chip ambar">{t.parcial} pagó parte</span>}
                     {t.de_mas > 0 && <span className="rd-chip verde">{t.de_mas} pagó de más</span>}
+                    {(t.no_salio ?? 0) > 0 && <span className="rd-chip gris">{t.no_salio} no {t.no_salio === 1 ? 'salió' : 'salieron'}</span>}
                 </div>
             </div>
 
@@ -315,7 +317,7 @@ function TarjetaHoja({ h, abierta, onToggle, rendible, app, onGuardado }: {
                         </div>
                         {h.filas.map(f => (
                             <div className="rd-fila" key={f.cod_cliente}>
-                                <span className="rd-cliente" data-l="Cliente">{f.cliente}<small> #{f.cod_cliente}{f.compartido ? ' · también en otra hoja' : ''}</small></span>
+                                <span className="rd-cliente" data-l="Cliente">{f.cliente}<small> #{f.cod_cliente}{f.compartido ? ' · también en otra hoja' : ''}{f.no_salieron && f.estado !== 'no_salio' ? ` · ${f.no_salieron} ${f.no_salieron === 1 ? 'remito no salió' : 'remitos no salieron'}` : ''}</small></span>
                                 <span data-l="Llevó">{money(f.llevo)}</span>
                                 <span data-l="NC">{f.nc ? money(-f.nc) : '—'}</span>
                                 <span data-l="Saldo ant.">{f.saldo_anterior ? money(f.saldo_anterior) : '—'}</span>

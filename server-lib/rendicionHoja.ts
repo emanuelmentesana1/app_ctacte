@@ -22,6 +22,8 @@ export interface PedidoIn {
     saldo_anterior?: number | null;
     /** Notas de crédito / débito ya vinculadas a la entrega (journal + panel). */
     notas?: Array<{ tipo?: unknown; total?: unknown }>;
+    /** Marcada «No salió» en la hoja (migración 057, `entregaNoSalio`): no cuenta, ni sus notas. */
+    no_salio?: boolean;
 }
 export interface HojaIn {
     id: string;
@@ -60,7 +62,7 @@ export interface TransferenciaIn {
     created_by_nombre?: string | null;
 }
 
-export type EstadoCobro = 'pago' | 'parcial' | 'de_mas' | 'sin_cobro';
+export type EstadoCobro = 'pago' | 'parcial' | 'de_mas' | 'sin_cobro' | 'no_salio';
 
 export interface FilaRendicion {
     cod_cliente: number;
@@ -79,6 +81,8 @@ export interface FilaRendicion {
     estado: EstadoCobro;
     /** El cliente estaba en otra hoja del mismo día: el cobro se cuenta en una sola. */
     compartido: boolean;
+    /** Remitos del cliente en esta hoja marcados «No salió». */
+    no_salieron: number;
 }
 
 export interface GastoHoja { id: string; fecha: string; importe: number; descripcion: string }
@@ -104,7 +108,7 @@ export interface HojaRendicion {
         efectivo: number; transferencias: number; cobrado: number; gastos: number;
         /** Lo que el chofer tendría que haber entregado en efectivo: cobrado en efectivo − gastos. */
         debe_entregar: number;
-        sin_cobro: number; parcial: number; de_mas: number;
+        sin_cobro: number; parcial: number; de_mas: number; no_salio: number;
     };
     /** El asiento de IM que pasó el efectivo de esta hoja a Caja Casa Central, si ya existe. */
     asiento_id: string | null;
@@ -272,8 +276,10 @@ export function armarRendiciones(e: EntradaRendicion): { hojas: HojaRendicion[];
         const porCliente = new Map<number, PedidoIn[]>();
         for (const p of h.pedidos) porCliente.set(Number(p.cod_cliente), [...(porCliente.get(Number(p.cod_cliente)) ?? []), p]);
         const filas: FilaRendicion[] = [...porCliente.entries()].map(([cod, ps]) => {
-            const llevo = centavos(ps.reduce((s, p) => s + (Number(p.total) || 0), 0));
-            const notas = ps.flatMap(p => p.notas ?? []);
+            // 🔄 05/10/2026: lo marcado «No salió» no cuenta, ni sus notas: igual que en la Liquidación.
+            const salieron = ps.filter(p => !p.no_salio);
+            const llevo = centavos(salieron.reduce((s, p) => s + (Number(p.total) || 0), 0));
+            const notas = salieron.flatMap(p => p.notas ?? []);
             const nc = centavos(notas.filter(n => esTipo(n.tipo, 'NC')).reduce((s, n) => s + Math.abs(Number(n.total) || 0), 0));
             const nd = centavos(notas.filter(n => esTipo(n.tipo, 'ND')).reduce((s, n) => s + Math.abs(Number(n.total) || 0), 0));
             const entregado = centavos(llevo - nc + nd);
@@ -294,8 +300,10 @@ export function armarRendiciones(e: EntradaRendicion): { hojas: HojaRendicion[];
                 transferencias: transf.map(t => ({ id: t.id, monto: Number(t.monto) || 0, medio: t.medio_pago, status: t.status, fecha: (t.fecha_comprobante || t.created_at || '').slice(0, 10), quien: t.created_by_rol ?? null, nombre: t.created_by_nombre ?? null })),
                 cobrado,
                 queda: centavos(entregado - cobrado),
-                estado: estadoDe(entregado, cobrado),
+                // Si nada de lo suyo salió y no pagó, no es un "sin cobro": no hubo entrega.
+                estado: !salieron.length && !(cobrado > 0.005) ? 'no_salio' : estadoDe(entregado, cobrado),
                 compartido: (hojasDelCliente.get(`${fechaDe(h)}|${cod}`)?.length ?? 0) > 1,
+                no_salieron: ps.length - salieron.length,
             };
         });
         const gastos = gastosPorNumero.get(h.numero) ?? [];
@@ -313,6 +321,7 @@ export function armarRendiciones(e: EntradaRendicion): { hojas: HojaRendicion[];
                 sin_cobro: filas.filter(f => f.estado === 'sin_cobro').length,
                 parcial: filas.filter(f => f.estado === 'parcial').length,
                 de_mas: filas.filter(f => f.estado === 'de_mas').length,
+                no_salio: filas.filter(f => f.estado === 'no_salio').length,
             },
             asiento_id: asientoDeHoja.get(h.numero) ?? null,
         };
