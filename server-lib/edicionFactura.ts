@@ -228,7 +228,9 @@ export async function avanzarEdicion(entrada: Edicion, deps: DepsEdicion): Promi
           if (op.fa_nueva) break;
           const renglones = op.renglones ?? [];
           if (!renglones.length) return frenar('fallo', 'La factura nueva no tiene renglones.');
-          const r = await deps.emitirFactura({ ...op.datos, items: renglones as any, total: totalRenglones(renglones), fecha: op.fa_vieja.fecha, numero: null });
+          // 🔴 Sin `origen_id`: viaja en `cod_compatibilidad`, y IM lo rechaza repetido aunque la factura
+          // que lo tenía esté anulada (FAB 51178, 05/10/2026). El vínculo con el pedido vive de nuestro lado.
+          const r = await deps.emitirFactura({ ...op.datos, origen_id: null, items: renglones as any, total: totalRenglones(renglones), fecha: op.fa_vieja.fecha, numero: null });
           if (!r.ok) {
             return r.sinRespuesta
               ? frenar('incierto', `InfoManager no contestó al emitir la factura nueva. NO se sabe si salió: verificalo en InfoManager antes de hacer nada. (${r.error})`)

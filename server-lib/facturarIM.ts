@@ -209,6 +209,8 @@ export function rechazoDefinitivo(mensaje: string): boolean {
   // Validación concreta de IM: el operador no tiene asociado el talonario. No es
   // una pérdida de respuesta y no debe dejar la operación bloqueada como incierta.
   if (/el usuario cargado \([^\r\n)]+\) no est[aá] relacionado a un punto de venta existente para el tipo de comprobante \[(?:NC|ND|FA|RE)\s*-\s*(?:A|B|C|X)\]/i.test(mensaje)) return true;
+  // IM no acepta un `cod_compatibilidad` repetido, ni contra un comprobante anulado (FAB 51178, 05/10/2026).
+  if (/ya existe un comprobante con cod_compatibilidad/i.test(mensaje)) return true;
   return /art[ií]culos sin stock suficiente:\s*\[|el art[ií]culo c[óo]digo \[\d+\] (?:no existe|no pertenece a la lista de precios \[\d+\])|ya existe una (?:factura|nota) con los siguientes datos|el n[uú]mero de comprobante \[\d+\] ya existe para el punto de venta \[\d+\] y empresa \[\d+\]/i.test(mensaje);
 }
 function rechazoEstructurado(data: any): boolean {

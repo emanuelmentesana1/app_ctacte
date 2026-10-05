@@ -658,6 +658,23 @@ describe('el tablero de la etapa 2', () => {
     expect(rango.ventas.map((v: any) => String(v.id))).toContain('999');
   });
 
+  /**
+   * 🔴 05/10/2026 — UNA FACTURA QUE NO SE PUEDE VERIFICAR NO TUMBA EL TABLERO.
+   *
+   * La FAB 51178 quedó anulada por una edición a medio camino y el tablero entero tiraba "No pude
+   * verificar la factura 51178…" para cualquier rango que la incluyera: Jorgelina no pudo facturar.
+   * El aviso va en SU fila; el resto se ve y se factura.
+   */
+  it('🔴 una factura anulada en IM queda marcada en su fila y el resto del tablero carga', async () => {
+    tablas.presupuestos_facturados={data:[{im_comprobante_id:'10',im_factura_id:'999',im_factura_numero:51178,cod_cliente:702,cod_empresa:1,total:100,facturado_at:'2026-10-02',estado_emision:'editando'}],error:null};
+    m.fetchVentas.mockResolvedValue([]);
+    m.cabeceraComprobante.mockResolvedValue({existe:true,anulada:true,total:100,tipo_comprobante:'FA',cod_cliente:702,cod_empresa:1});
+    const r=await llamar(tableroFacturacion,{method:'GET'});
+    expect(r.status).toBe(200);
+    const fila = [...(r.body.pendientes ?? []), ...(r.body.facturados ?? [])].find((f: any) => f.im_factura_numero === 51178);
+    expect(fila?.importe_error).toMatch(/ANULADA/);
+  });
+
   it('🪤 si esa lectura falla, el error llega a los dos y no se repite el GET', async () => {
     tablas.presupuestos_facturados={data:[{im_comprobante_id:'10',im_factura_id:'999',im_factura_numero:50444,cod_cliente:430,cod_empresa:1,total:100,facturado_at:'2026-09-11',estado_emision:'completo'}],error:null};
     m.fetchVentas.mockResolvedValue([]);

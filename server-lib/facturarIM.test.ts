@@ -1209,3 +1209,10 @@ describe('las notas v1 calculan el número con la ventana de antes', () => {
     expect(fechaDesde).toBe(new Date(hoy.getTime() - 7 * 864e5).toISOString().slice(0, 10));
   });
 });
+
+describe('rechazos definitivos', () => {
+  it('🔴 "ya existe un comprobante con cod_compatibilidad" es un rechazo de IM, no una falta de respuesta', async () => {
+    const { rechazoDefinitivo } = await import('./facturarIM.js');
+    expect(rechazoDefinitivo("Validaciones: • Ya existe un comprobante con cod_compatibilidad = '59041796'")).toBe(true);
+  });
+});

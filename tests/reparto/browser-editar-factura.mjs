@@ -152,6 +152,17 @@ try {
     } finally { await ctx.close(); }
   });
 
+  /** 🔴 05/10/2026: una factura que no se puede verificar se marca en su fila; antes tumbaba el tablero. */
+  await test('Una factura sin verificar se marca en su fila y no muestra un importe inventado', async () => {
+    const { page, ctx } = await setup(390);
+    try {
+      await abrir(page, { fila: { total: null, importe_error: 'La factura 59042340 está ANULADA en InfoManager.' } });
+      const fila = page.locator('.fc-facturados tbody tr').first();
+      await fila.getByText(/sin verificar/).waitFor();
+      assert(!/NaN/.test(await fila.innerText()), 'Muestra $NaN');
+    } finally { await ctx.close(); }
+  });
+
   await test('La fila de una edición sin terminar lo dice y ofrece retomarla', async () => {
     const { page, ctx } = await setup(1440);
     try {

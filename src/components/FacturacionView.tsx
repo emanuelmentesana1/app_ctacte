@@ -40,6 +40,8 @@ interface Fila {
     cliente_nombre: string;
     zona: string;
     total: number;
+    /** El servidor no pudo verificar la factura (anulada, borrada, IM no contestó): el motivo, y `total` va null. */
+    importe_error?: string | null;
     bultos: number;
     kg: number;
     im_factura_numero: number | null;
@@ -616,7 +618,11 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                                     </td>
                                     <td>RE {p.im_remito_numero ?? '—'}</td>
                                     <td className="n">
-                                        {money(p.total + ajusteNotas(p.notas))}
+                                        {/* 🔴 05/10/2026: una factura que no se pudo verificar se marca en SU fila
+                                            (antes tumbaba el tablero entero). Sin importe: no se muestra uno inventado. */}
+                                        {p.importe_error
+                                            ? <span className="fc-badge grave" title={p.importe_error}>sin verificar · {p.importe_error}</span>
+                                            : money(p.total + ajusteNotas(p.notas))}
                                         {/* 🔴 Lo que la factura decía antes de las notas: si sólo se
                                             ve el neto, nadie entiende por qué no coincide con la FA. */}
                                         {!!ajusteNotas(p.notas) && (

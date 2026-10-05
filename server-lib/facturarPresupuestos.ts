@@ -1745,7 +1745,10 @@ export async function tableroFacturacion(req: Request & { user?: JwtPayload }, r
           .in('im_comprobante_id', emitidos.map((e: any) => String(e.im_comprobante_id)))
       : { data: emitidos, error: null };
     if (errAlDia) { res.status(502).json({ error: `No pude releer las facturas actualizadas: ${errAlDia.message}` }); return; }
-    const actuales = await actualizarImportesFacturas(alDia ?? [], { ventas: ventasBusqueda ?? await fetchVentas(desde, hastaBusqueda), actualizar: refrescar, leerCabecera });
+    // 🔴 `tolerarErrores`: una factura que no se puede verificar queda marcada en SU fila. Sin esto,
+    // el 05/10/2026 la FAB 51178 (anulada por una edición a medio camino) tumbó el tablero entero y
+    // Jorgelina no pudo facturar. Es lo mismo que ya hacen la vista de remitos y las hojas.
+    const actuales = await actualizarImportesFacturas(alDia ?? [], { ventas: ventasBusqueda ?? await fetchVentas(desde, hastaBusqueda), actualizar: refrescar, leerCabecera, tolerarErrores: true });
     medir('importes');
     const porId = new Map(actuales.map((e: any) => [String(e.im_comprobante_id), e]));
 
@@ -1784,7 +1787,11 @@ export async function tableroFacturacion(req: Request & { user?: JwtPayload }, r
         im_numero: e.im_numero ?? p?.im_numero ?? null,
         cod_cliente: e.cod_cliente ?? p?.cod_cliente,
         cliente_nombre: e.cliente_nombre ?? p?.cliente_nombre ?? `Cliente ${e.cod_cliente}`,
-        fecha: e.fecha ?? p?.fecha ?? null, total: Number(e.total ?? p?.total ?? 0),
+        // 🪤 Una factura que no se pudo verificar NO toma el total del presupuesto: se vería como un
+        // importe verificado. Va vacío y con el motivo (`importe_error`), que la pantalla muestra.
+        fecha: e.fecha ?? p?.fecha ?? null,
+        total: e.importe_fuente === 'no_verificado' ? null : Number(e.total ?? p?.total ?? 0),
+        importe_error: e.importe_error ?? null,
         bultos: Number(e.bultos ?? p?.bultos ?? 0), kg: Number(e.kg ?? p?.kg ?? 0),
       });
     }

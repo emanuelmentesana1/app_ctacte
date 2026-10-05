@@ -71,6 +71,13 @@ describe('avanzarEdicion', () => {
     expect(d.cerrarPedido).toHaveBeenCalled();
   });
 
+  it('🔴 la factura nueva va SIN el presupuesto en cod_compatibilidad: IM lo rechaza repetido aunque la vieja esté anulada', async () => {
+    // FAB 51178, 05/10/2026: "Ya existe un comprobante con cod_compatibilidad = '59041796'".
+    const d = deps();
+    await avanzarEdicion(edicion(), d);
+    expect(vi.mocked(d.emitirFactura).mock.calls[0][0].origen_id ?? null).toBeNull();
+  });
+
   it('🔴 la factura nueva queda GUARDADA antes de pedir el remito: un corte ahí no la emite dos veces', async () => {
     const d = deps({ emitirRemito: vi.fn(async () => { throw new Error('se cayó la conexión'); }) });
     const op = await avanzarEdicion(edicion(), d);
