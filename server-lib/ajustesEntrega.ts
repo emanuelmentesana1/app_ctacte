@@ -88,6 +88,11 @@ export async function listarAjustes(req: Request & { user?: JwtPayload }, res: R
      * ocurre, y se descubre después de tocarlo (caso real: la NC B 13 de ANDRADES).
      */
     const porNota = new Map((ajustes ?? []).filter((a: any) => a.im_ajuste_id).map((a: any) => [String(a.im_ajuste_id), a]));
+    // 🔄 05/10/2026 (Mati): cada nota dice de qué cliente es. Sale de la entrega a la que está atada.
+    const clienteDeNota = new Map<string, { cod_cliente: number | null; cliente_nombre: string | null }>();
+    for (const p of conNotas as any[]) for (const n of p.notas ?? []) {
+      if (!clienteDeNota.has(String(n.id))) clienteDeNota.set(String(n.id), { cod_cliente: p.cod_cliente ?? null, cliente_nombre: p.cliente_nombre ?? null });
+    }
     const renglones = notas.map((n: any) => {
       const a = porNota.get(String(n.id));
       const fuentes: string[] = n.fuentes ?? [];
@@ -99,6 +104,7 @@ export async function listarAjustes(req: Request & { user?: JwtPayload }, res: R
         ajuste_id: soloPanel ? (a?.id ?? null) : null,
         motivo: a?.motivo ?? null,
         im_comprobante_id: a?.im_comprobante_id ?? null,
+        ...(clienteDeNota.get(String(n.id)) ?? { cod_cliente: null, cliente_nombre: null }),
       };
     });
     /**

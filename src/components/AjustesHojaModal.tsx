@@ -74,6 +74,9 @@ interface Nota {
     ajuste_id: string | null;
     motivo: string | null;
     im_comprobante_id: string | null;
+    /** 🔄 05/10/2026: de qué cliente es (sale de la entrega a la que está atada). */
+    cod_cliente?: number | null;
+    cliente_nombre?: string | null;
 }
 
 /** La entrega a la que se ata la nota, con la factura que le corresponde HOY. */
@@ -320,6 +323,10 @@ export function AjustesHojaModal({ hojaId, numero, pedidos, onClose, onCambio }:
                             <div>
                                 <div className="aj-fila-tit">
                                     {n.tipo} {n.numero ?? '—'}
+                                    {/* 🔄 05/10/2026 (Mati): a qué cliente corresponde, en la misma línea del número. */}
+                                    {(n.cod_cliente != null || n.cliente_nombre) && (
+                                        <span className="aj-cliente">· {n.cod_cliente ?? ''} {n.cliente_nombre ?? ''}</span>
+                                    )}
                                     <b className={n.signo > 0 ? 'suma' : 'resta'}>
                                         {n.signo > 0 ? '+' : '−'} {money(n.importe)}
                                     </b>

@@ -178,6 +178,24 @@ describe('listar', () => {
     expect(r.body.notas_credito).toBe(25000);
   });
 
+  /**
+   * 🔄 05/10/2026 (Mati, captura de la hoja 3448): cada nota tiene que decir de qué CLIENTE es. Las de
+   * corrección de factura decían sólo «Desde corrección de factura» y no se sabía a quién le volvió.
+   */
+  it('🔑 una nota de corrección de factura dice de qué cliente es: código y nombre', async () => {
+    tablas['hojas_ruta_ajustes'] = { data: [], error: null };
+    tablas['facturas_correcciones'] = { data: [{ im_factura_id: '58796590', im_comprobante_id: '58900002', tipo: 'NC B', total: 25000, numero: 30080 }], error: null };
+    tablas['presupuestos_facturados'] = { data: [{ im_comprobante_id: '10', im_factura_id: '58796590', cod_cliente: 1093, cod_empresa: 1, total: 100000, facturado_at: 'x' }], error: null };
+    const r = await llamar(listarAjustes, { params: { id: 'h1' } });
+    expect(r.body.notas[0]).toMatchObject({ numero: 30080, cod_cliente: 1093, cliente_nombre: 'ARON, Jorge' });
+  });
+
+  it('🔑 una nota vinculada desde el panel también: la del cliente de su entrega', async () => {
+    tablas['hojas_ruta_ajustes'] = { data: [vinculada({ im_comprobante_id: '20' })], error: null };
+    const r = await llamar(listarAjustes, { params: { id: 'h1' } });
+    expect(r.body.notas[0]).toMatchObject({ numero: 30079, cod_cliente: 500, cliente_nombre: 'MORELLI' });
+  });
+
   it('🔑 la misma nota por las dos fuentes se cuenta una sola vez', async () => {
     tablas['hojas_ruta_ajustes'] = { data: [vinculada({ im_ajuste_id: '58900002', importe: 25000 })], error: null };
     tablas['facturas_correcciones'] = { data: [{ im_factura_id: '58796590', im_comprobante_id: '58900002', tipo: 'NC B', total: 25000, numero: 30080 }], error: null };

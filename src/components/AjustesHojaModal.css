@@ -65,6 +65,7 @@
 .aj-fila > div:first-child { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.2rem; }
 .aj-fila-tit { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; font-size: 0.88rem; font-weight: 600; }
 .aj-fila-tit b.resta { color: #b03a26; }
+.aj-fila-tit .aj-cliente { font-weight: 500; color: var(--color-text); }
 .aj-fila-tit b.suma { color: var(--color-success); }
 .aj-fila-meta { font-size: 0.78rem; color: var(--color-text-muted); word-break: break-word; }
 .aj-fila-meta.warn { color: #b03a26; }

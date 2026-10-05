@@ -26,7 +26,7 @@ const AJUSTES = {
   entregas,
   notas: [{
     im_ajuste_id: '58802044', tipo: 'NC B', numero: 30079, importe: 30000, signo: -1,
-    origen: 'correccion', ajuste_id: null, motivo: null, im_comprobante_id: null,
+    origen: 'correccion', ajuste_id: null, motivo: null, im_comprobante_id: null, cod_cliente: 101, cliente_nombre: 'CLIENTE ALFA',
   }],
 };
 const CANDIDATA = {
@@ -80,6 +80,9 @@ try {
       const texto = await fila.innerText();
       assert(texto.includes('30079'), `No se lee la nota del journal: "${texto}"`);
       assert(/desde corrección de factura/i.test(texto), `No dice de dónde vino: "${texto}"`);
+      // 🔄 05/10/2026 (Mati): a qué cliente corresponde, en la misma línea del número.
+      const titulo = await fila.locator('.aj-fila-tit').innerText();
+      assert(/30079/.test(titulo) && /101 CLIENTE ALFA/.test(titulo), `La línea del número no dice el cliente: "${titulo}"`);
       // Borrar acá no la sacaría de ningún lado: no hay vínculo propio que soltar.
       assert(await fila.locator('button').count() === 0, 'Ofrece soltar una nota que no ató esta pantalla');
     } finally { await ctx.close(); }
