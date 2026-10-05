@@ -27,6 +27,15 @@ function getToken(cuenta: MPCuenta): string | null {
   }
 }
 
+/**
+ * MP devuelve de a 50 pagos por pedido. 🪤 Hasta el 05/10/2026 se pedía UNA página y no se seguía: del
+ * 29/09 al 02/10 la cuenta principal tuvo 95 pagos aprobados, así que del 51 en adelante salía "no
+ * encontrado" aunque el pago hubiera entrado. Ahora se recorre hasta el total, con tope.
+ */
+const POR_PAGINA = 50;
+/** 1.000 pagos por cuenta y búsqueda: un rango de pocos días no llega; si llega, el rango está mal. */
+const MAX_PAGINAS = 20;
+
 async function buscarEnCuenta(cuenta: MPCuenta, monto: number, desdeISO: string, hastaISO: string): Promise<MPMatch[]> {
   const token = getToken(cuenta);
   if (!token) return [];
@@ -36,19 +45,24 @@ async function buscarEnCuenta(cuenta: MPCuenta, monto: number, desdeISO: string,
     const beginDate = `${desdeISO}T00:00:00.000-03:00`;
     const endDate = `${hastaISO}T23:59:59.999-03:00`;
 
-    const { data } = await axios.get(`${MP_API}/v1/payments/search`, {
-      params: {
-        range: 'date_created',
-        begin_date: beginDate,
-        end_date: endDate,
-        status: 'approved',
-        limit: 50,
-      },
-      headers: { Authorization: `Bearer ${token}` },
-      timeout: 15000,
-    });
-
-    const results: any[] = data?.results ?? [];
+    const results: any[] = [];
+    for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
+      const { data } = await axios.get(`${MP_API}/v1/payments/search`, {
+        params: {
+          range: 'date_created',
+          begin_date: beginDate,
+          end_date: endDate,
+          status: 'approved',
+          limit: POR_PAGINA,
+          offset: pagina * POR_PAGINA,
+        },
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 15000,
+      });
+      const lote = (data?.results ?? []) as typeof results;
+      results.push(...lote);
+      if (lote.length < POR_PAGINA || results.length >= Number(data?.paging?.total ?? 0)) break;
+    }
     // MP no soporta filtro por monto exacto en la query, filtramos aca
     return results
       .filter(r => Number(r.transaction_amount) === Number(monto))
