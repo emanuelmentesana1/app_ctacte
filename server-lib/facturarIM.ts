@@ -171,6 +171,8 @@ const UNIDAD_NEGOCIO = Number(process.env.IM_UNIDAD_NEGOCIO || 1);
  */
 export async function proximoNumeroFactura(
   letra: 'A' | 'B', puntoDeVenta: number, dias: number, tipo: 'FA' | 'NC' | 'ND', serie: SerieComprobante,
+  /** Días hacia atrás de la ventana corta. Sólo quien reintenta ante "ya existe" puede usar los 3. */
+  diasCorta: number = DIAS_BUSQUEDA_CORTA,
 ): Promise<number | null> {
   // 🔴 Sin una serie completa no se consulta nada: el número saldría de un conjunto que no es
   // el que IM valida.
@@ -189,10 +191,10 @@ export async function proximoNumeroFactura(
    * semana siempre hay comprobantes del talonario; la ventana larga queda para el caso raro
    * (talonario nuevo, feriados) y es el único que paga los 31 s.
    */
-  const corta = await maxDe(Math.min(DIAS_BUSQUEDA_CORTA, dias));
+  const corta = await maxDe(Math.min(diasCorta, dias));
   if (corta.estado === 'ok') return corta.numero;
   // 🪤 Sólo se amplía ante un VACÍO. Con incertidumbre, más filas no la resuelven: la esconden.
-  if (corta.estado === 'incierto' || dias <= DIAS_BUSQUEDA_CORTA) {
+  if (corta.estado === 'incierto' || dias <= diasCorta) {
     if (corta.estado === 'incierto') console.warn(`[numeracion] ${tipo} ${letra} pv${puntoDeVenta}: ${corta.motivo}`);
     return null;
   }
@@ -800,7 +802,9 @@ async function emitirNota(
    * 🪤 En automático se ignora un `d.numero` que venga de afuera: mezclar los dos modos en una
    * misma emisión es pedir un número y a la vez decir cuál.
    */
-  const numero = NUMERO_NC_AUTO ? 0 : (d.numero ?? await proximoNumeroFactura(letra, PTO_VENTA_NC, DIAS_BUSQUEDA_RESPALDO, tipo, serieNota));
+  const numero = NUMERO_NC_AUTO ? 0 : (d.numero ?? await proximoNumeroFactura(letra, PTO_VENTA_NC, 30, tipo, serieNota, 7));
+  // 🔴 Las notas v1 NO reintentan ante "ya existe" (no avanzan su serie: el rechazo va al journal),
+  // así que se quedan con la ventana de antes, 7 días y respaldo de 30. Las de v2 las numera IM.
   if (!NUMERO_NC_AUTO && (numero == null || !Number.isSafeInteger(numero) || numero <= 0)) {
     // 🪤 Sin 'emitila y vinculala': vincular una nota externa existe para las NC de una hoja, no
     // para las ND.

@@ -1189,3 +1189,23 @@ describe('emitirRemitoMasivo — una tanda fechada antes de la ventana', () => {
     expect(r.ok).toBe(true);
   });
 });
+
+/**
+ * 🔴 05/10/2026 — LAS NOTAS v1 NO REINTENTAN ANTE "YA EXISTE", A PROPÓSITO: no avanzan su serie y el
+ * rechazo queda en el journal para resolverlo en IM. El criterio de 3 días atrás exige ese reintento,
+ * así que las notas siguen con la ventana de antes (7 días, respaldo 30). Las de v2 las numera IM.
+ */
+describe('las notas v1 calculan el número con la ventana de antes', () => {
+  it('7 días atrás, no 3', async () => {
+    (await import('./infomanager.js')).invalidarCacheNumeracion();
+    const get = vi.fn(async () => ({ data: { results: [{ numero: 30209, tipo_comprobante: 'NC', tipo_factura: 'B', punto_de_venta: 777, ...SERIE }] } }));
+    const post = vi.fn(async () => ({ data: { isCreated: true, venta: { id: 1, numero: 30210 } } }));
+    vi.mocked(axios.create).mockReturnValue({ post, get, put: vi.fn(), interceptors: { request: { use: vi.fn() } } } as any);
+    vi.mocked(axios.post).mockResolvedValue({ data: { token: 'tok' } } as any);
+    const { emitirNotaCredito } = await import('./facturarIM.js');
+    await emitirNotaCredito({ ...DATOS, numero: null } as any);
+    const { fechaDesde } = (get.mock.calls[0] as any[])[1].params;
+    const hoy = new Date(Date.now() - 3 * 3600e3);
+    expect(fechaDesde).toBe(new Date(hoy.getTime() - 7 * 864e5).toISOString().slice(0, 10));
+  });
+});
