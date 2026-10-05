@@ -19,6 +19,41 @@ export async function mutarReparto(actor: string | undefined, accion: string, da
   return data;
 }
 /**
+ * 🔑 ¿La entrega salió? Mati (05/10/2026): una entrega marcada «no salió» (su remito se anuló en IM
+ * porque la mercadería nunca salió) deja de contar en lo entregado del chofer. Pasó en septiembre con
+ * LEAL y BUSTOS (hoja 3402). Es el ÚNICO criterio: lo usan la Liquidación y Rendiciones, así las dos
+ * pantallas dicen lo mismo.
+ *
+ * 🪤 No se filtra al leer las hojas: la hoja tiene que seguir mostrando la entrega (tachada) para poder
+ * deshacer la marca. Se excluye donde se SUMA.
+ */
+export const entregaNoSalio = (p: any): boolean => p?.estado_entrega === 'no_salio';
+
+/** ¿Ya se corrió la migración 057? Se mira la columna; se recuerda 60 s si está y 5 s si no. */
+let estadoEntregaVisto: { hasta: number; hay: boolean } | null = null;
+export async function hayEstadoEntrega(): Promise<boolean> {
+  if (estadoEntregaVisto && estadoEntregaVisto.hasta > Date.now()) return estadoEntregaVisto.hay;
+  const { error } = await sb().from('hojas_ruta_pedidos').select('estado_entrega').limit(1);
+  const hay = !error;
+  estadoEntregaVisto = { hay, hasta: Date.now() + (hay ? 60_000 : 5_000) };
+  return hay;
+}
+
+/**
+ * Marca o desmarca «no salió». Función propia, no `mutar_reparto`: ésa no deja tocar una hoja
+ * cerrada, y justo se descubre al liquidar. Controla la versión de la hoja y deja historial.
+ */
+export async function marcarEstadoEntregaRPC(actor: string | undefined, datos: Record<string, unknown>) {
+  const { data, error } = await sb().rpc('marcar_estado_entrega', { p_tenant: TENANT_ID, p_actor: actor, p_datos: datos });
+  if (error) {
+    if (['PGRST202', '42883', '42703'].includes(error.code)) throw new ErrorReparto('Falta aplicar la migración 057 para marcar «no salió». No se modificó nada.', 503);
+    throw new ErrorReparto(error.message, 409);
+  }
+  if (data == null) throw new ErrorReparto('La base no confirmó el cambio. Verificá la migración 057.', 503);
+  return data;
+}
+
+/**
  * Vincular una nota que ya existe en IM. Función propia, no `mutar_reparto`: la identidad de la
  * factura de destino se resuelve dentro del mismo lock y se coteja contra la que vio el operador.
  */

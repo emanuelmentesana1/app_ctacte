@@ -15,7 +15,7 @@ import { itemsPorFechas } from './itemsRango.js';
 import type { Request, Response } from 'express';
 import { sb, TENANT_ID } from './supabase.js';
 import type { JwtPayload } from './auth.js';
-import { puedeArmarHojasDeRuta } from './permisos.js';
+import { puedeArmarHojasDeRuta, puedeMarcarEntrega } from './permisos.js';
 import {
   fetchVentas, fetchVentasItems, fetchArticulosCatalogo, fetchClientesIMCached,
   fechaArgentina, comprobantesPendientesCliente,
@@ -27,7 +27,7 @@ import { armarFraccionado, totalesFraccionado } from './fraccionado.js';
 import { formatosDeBolsa } from './formatosBolsa.js';
 import { sugerirRepartos } from './sugerirRepartos.js';
 import { saldoAnteriorDeLaHoja, ajusteDeNotas } from './saldoCliente.js';
-import { ErrorReparto, emitidosDe, mutarReparto, verificarEntregas, enriquecerEntregas, enriquecerHojas, aplicarImportesCierre, notasDeHoja, notasUnicas } from './repartoDatos.js';
+import { ErrorReparto, emitidosDe, mutarReparto, verificarEntregas, enriquecerEntregas, enriquecerHojas, aplicarImportesCierre, notasDeHoja, notasUnicas, hayEstadoEntrega, marcarEstadoEntregaRPC } from './repartoDatos.js';
 import { proximoNumeroHoja } from './numeroHojaRuta.js';
 import { comprobarEsquema } from './estadoAplicacion.js';
 import { LecturasCompartidas } from './lecturasCompartidas.js';
@@ -323,7 +323,7 @@ export async function listarHojas(req: Request & { user?: JwtPayload }, res: Res
      * pantalla.
      */
     res.json({ ok: true, desde, hasta, fecha: hasta, hojas: conCarga, siguiente,
-      capacidades: { nombre: (await comprobarEsquema()).nombre } });
+      capacidades: { nombre: (await comprobarEsquema()).nombre, estado_entrega: await hayEstadoEntrega() } });
   } catch (err: any) {
     res.status(err.status ?? 500).json({ error: err?.message ?? 'error' });
   }
@@ -948,6 +948,30 @@ export async function borrarHoja(req: Request & { user?: JwtPayload }, res: Resp
 }
 
 /** DELETE /api/hojas-ruta/pedidos/:comprobanteId — lo saca de la hoja y vuelve a pendientes. */
+/**
+ * POST /api/hojas-ruta/:id/entregas/:comprobanteId/estado — marca o desmarca «no salió».
+ *
+ * Mati (05/10/2026): una entrega cuyo remito se anuló porque la mercadería no salió deja de contar en
+ * lo entregado del chofer, desde el panel. Sólo admin y gerente, con motivo, y también en una hoja
+ * CERRADA (se descubre al liquidar). La base controla la versión de la hoja y guarda el historial.
+ * Body: { estado: 'no_salio' | null, motivo, version_esperada }.
+ */
+export async function marcarEstadoEntrega(req: Request & { user?: JwtPayload }, res: Response) {
+  if (!puedeMarcarEntrega(String(req.user?.rol ?? ''))) { res.status(403).json({ error: 'Esto lo marca administración (admin o gerente).' }); return; }
+  const estado = req.body?.estado == null || req.body?.estado === '' ? null : String(req.body.estado);
+  if (estado !== null && estado !== 'no_salio') { res.status(400).json({ error: 'Estado de entrega inválido.' }); return; }
+  const motivo = String(req.body?.motivo ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (estado === 'no_salio' && motivo.length < 3) { res.status(400).json({ error: 'Escribí por qué no salió: queda registrado.' }); return; }
+  if (!(await hayEstadoEntrega())) { res.status(503).json({ error: 'Falta aplicar la migración 057 para marcar «no salió». No se modificó nada.' }); return; }
+  try {
+    const r = await marcarEstadoEntregaRPC(req.user?.sub, {
+      hoja_id: String(req.params.id), im_comprobante_id: String(req.params.comprobanteId), estado, motivo: estado ? motivo : null,
+      version_esperada: req.body?.version_esperada,
+    });
+    res.json({ ok: true, ...(r as object) });
+  } catch (err: any) { res.status(err.status ?? 500).json({ error: err.message }); }
+}
+
 export async function quitarPedido(req: Request & { user?: JwtPayload }, res: Response) {
   if (frenaSiNoPuede(req, res)) return;
   const comprobanteId = String(req.params.comprobanteId);

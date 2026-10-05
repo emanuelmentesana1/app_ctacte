@@ -25,7 +25,7 @@ import type { Request, Response } from 'express';
 import { sb, TENANT_ID } from './supabase.js';
 import type { JwtPayload } from './auth.js';
 import { puedeArmarHojasDeRuta } from './permisos.js';
-import { leerPaginas, enriquecerHojas, notasDeHojas, notasUnicas } from './repartoDatos.js';
+import { leerPaginas, enriquecerHojas, notasDeHojas, notasUnicas, entregaNoSalio } from './repartoDatos.js';
 import { fechaArgentina } from './infomanager.js';
 
 function frenaSiNoPuede(req: Request & { user?: JwtPayload }, res: Response): boolean {
@@ -79,14 +79,19 @@ export async function liquidacionMensual(req: Request & { user?: JwtPayload }, r
      * notas emitidas por el circuito de corrección de factura, y el chofer cobraba sobre un
      * importe que no descontaba lo que volvió.
      */
+    // 🔄 05/10/2026: lo que NO salió no cuenta, y sus notas tampoco (se descontaría dos veces).
     const notasPorHoja = new Map((await notasDeHojas((hojas ?? []).map((h: any) => ({ hojaId: String(h.id), filas: pedidosDe(h) }))))
-      .map(g => [g.hojaId, notasUnicas(g.filas.flatMap((f: any) => f.notas ?? []), `la hoja ${g.hojaId}`)]));
+      .map(g => [g.hojaId, notasUnicas(g.filas.filter((f: any) => !entregaNoSalio(f)).flatMap((f: any) => f.notas ?? []), `la hoja ${g.hojaId}`)]));
     const porChofer = new Map<string, any>();
     let abiertas = 0;
     let importeAbierto = 0;
 
+    const noSalieron = { entregas: 0, importe: 0 };
     for (const h of (hojas ?? []) as any[]) {
-      const pedidos = pedidosDe(h);
+      const todas = pedidosDe(h);
+      const pedidos = todas.filter((p: any) => !entregaNoSalio(p));
+      const noSalio = todas.filter(entregaNoSalio);
+      const importeNoSalio = noSalio.reduce((s: number, p: any) => s + Number(p.total ?? 0), 0);
       const despachado = pedidos.reduce((s: number, p: any) => s + Number(p.total ?? 0), 0);
       // 🔴 Si dos fuentes cuentan la misma nota distinto, `notasUnicas` ya cortó: de acá sale un
       // pago y un total elegido por orden de lectura es un pago elegido al azar.
@@ -117,6 +122,8 @@ export async function liquidacionMensual(req: Request & { user?: JwtPayload }, r
           hojas: 0, pedidos: 0, clientes: new Set<number>(), bultos: 0, kg: 0, importe: 0,
           // Se muestran aparte: es lo que el chofer llevó y volvió sin entregar.
           despachado: 0, notas_credito: 0, notas_debito: 0,
+          // Marcadas «no salió»: no se pagan, pero se muestran para que se vea por qué baja el total.
+          no_salieron: { entregas: 0, importe: 0 },
           numeros: [] as number[],
         });
       }
@@ -130,6 +137,8 @@ export async function liquidacionMensual(req: Request & { user?: JwtPayload }, r
       c.despachado += despachado;
       c.notas_credito += nc;
       c.notas_debito += nd;
+      c.no_salieron.entregas += noSalio.length; c.no_salieron.importe += importeNoSalio;
+      noSalieron.entregas += noSalio.length; noSalieron.importe += importeNoSalio;
       c.numeros.push(h.numero);
     }
 
@@ -139,6 +148,7 @@ export async function liquidacionMensual(req: Request & { user?: JwtPayload }, r
         clientes: c.clientes.size,
         bultos: redondear(c.bultos), kg: redondear(c.kg), importe: redondear(c.importe),
         despachado: redondear(c.despachado), notas_credito: redondear(c.notas_credito), notas_debito: redondear(c.notas_debito),
+        no_salieron: { entregas: c.no_salieron.entregas, importe: redondear(c.no_salieron.importe) },
       }))
       .sort((a, b) => b.importe - a.importe);
 
@@ -150,6 +160,7 @@ export async function liquidacionMensual(req: Request & { user?: JwtPayload }, r
         pedidos: choferes.reduce((s, c) => s + c.pedidos, 0),
         kg: redondear(choferes.reduce((s, c) => s + c.kg, 0)),
         importe: redondear(choferes.reduce((s, c) => s + c.importe, 0)),
+        no_salieron: { entregas: noSalieron.entregas, importe: redondear(noSalieron.importe) },
       },
       // Lo que todavía no se puede liquidar, para que se vea antes de pagar.
       sin_cerrar: { hojas: abiertas, importe: redondear(importeAbierto) },

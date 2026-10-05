@@ -7,7 +7,7 @@ import {
     ChevronRight, RefreshCw, Trash2, Printer, CheckCircle2, Store, Lock, Unlock, FileMinus,
     MessageSquare, Search, ChevronDown, History, Info,
 } from 'lucide-react';
-import { authHeaders } from '../utils/auth';
+import { authHeaders, getUser } from '../utils/auth';
 import { coincide } from '../utils/buscar';
 import { useRecargarAlVolver } from '../utils/recargarAlVolver';
 import { ImprimirHoja } from './ImprimirHoja';
@@ -83,6 +83,9 @@ interface HojaPedido {
     im_factura_numero: number | null;
     im_remito_numero: number | null;
     facturado_at: string | null;
+    /** 🔄 05/10/2026: 'no_salio' = la mercadería no salió; no cuenta en la liquidación del chofer. */
+    estado_entrega?: string | null;
+    estado_entrega_motivo?: string | null;
 }
 
 interface Hoja {
@@ -257,6 +260,12 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
     const [conflictosAsignacion, setConflictosAsignacion] = useState<any[]>([]);
     /** Si la base todavía no tiene la 044, el rótulo ni se ofrece: guardarlo sería un error. */
     const [puedeNombrar, setPuedeNombrar] = useState(false);
+    /**
+     * «No salió» (Mati, 05/10/2026): sólo admin y gerente, y sólo con la migración 057 corrida.
+     * Cambia lo que se le paga a un chofer, también en una hoja cerrada.
+     */
+    const [hayEstadoEntrega, setHayEstadoEntrega] = useState(false);
+    const puedeMarcarEntregas = hayEstadoEntrega && ['admin', 'gerente'].includes(String(getUser()?.rol ?? ''));
     const cargarHojas = useCallback(async (antes?: number, forzar = true) => {
         const lectura = iniciarHojas(forzar); if (!lectura) return;
         setCargandoHojas(true); setErrorHojas(null);
@@ -287,7 +296,7 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
             if (!h.ok) throw new Error(d?.error ?? 'No se pudieron consultar las hojas');
             for (const hoja of d?.hojas ?? []) versionesHoja.current.set(hoja.id, hoja.version);
             setHojas(previas => antes ? [...previas, ...(d?.hojas ?? [])] : d?.hojas ?? []);
-            setSiguienteHoja(d?.siguiente ?? null); setPuedeNombrar(d?.capacidades?.nombre === true); lectura.confirmar();
+            setSiguienteHoja(d?.siguiente ?? null); setPuedeNombrar(d?.capacidades?.nombre === true); setHayEstadoEntrega(d?.capacidades?.estado_entrega === true); lectura.confirmar();
         } catch (e: any) { if (lectura.vigente()) setErrorHojas(e?.message ?? 'No se pudieron consultar las hojas'); }
         finally { if (lectura.vigente()) setCargandoHojas(false); }
     }, [desde, hasta, historico, iniciarHojas]);
@@ -658,6 +667,32 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
             setSel(new Set());
             // Salen de pendientes: la lista se rehace contra IM, sin bloquear la pantalla.
             void cargar(true);
+        } finally { setTrabajando(false); operacion.terminar(); }
+    }
+
+    /**
+     * Marca que una entrega no salió, o lo deshace. Deja de contar en lo entregado del chofer (la
+     * liquidación). Se puede en una hoja cerrada: se descubre al liquidar. Queda registrado con motivo.
+     */
+    async function marcarNoSalio(h: Hoja, p: HojaPedido, marcar: boolean) {
+        const quien = p.cliente_nombre ?? 'la entrega';
+        let motivo: string | null = null;
+        if (marcar) {
+            motivo = prompt(`¿Por qué no salió ${quien}?\n\nQueda registrado y deja de contar en la liquidación del chofer.`, 'remito anulado en IM, no salió');
+            if (motivo == null) return;
+            if (motivo.trim().length < 3) { setAviso('Escribí por qué no salió: queda registrado.'); return; }
+        } else if (!confirm(`¿${quien} sí salió?\n\nVuelve a contar en la liquidación del chofer.`)) {
+            return;
+        }
+        if (!operacion.comenzar()) return;
+        setTrabajando(true); setAviso(null);
+        try {
+            const ok = await pedir(`/api/hojas-ruta/${h.id}/entregas/${encodeURIComponent(p.im_comprobante_id)}/estado`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ estado: marcar ? 'no_salio' : null, motivo, version_esperada: versionesHoja.current.get(h.id) }),
+            }, 'No se pudo cambiar el estado de la entrega');
+            if (ok) setInfo(marcar ? `${quien}: no salió. Ya no cuenta en la liquidación.` : `${quien} vuelve a contar en la liquidación.`);
+            await cargarHojas();
         } finally { setTrabajando(false); operacion.terminar(); }
     }
 
@@ -1054,11 +1089,15 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
 
                             {h.pedidos.map(p => {
                               const emitido = p.im_factura_numero != null || !!p.facturado_at;
+                              const noSalio = p.estado_entrega === 'no_salio';
                               return (
-                                <div className="hr-hoja-ped" key={p.im_comprobante_id}>
+                                <div className={`hr-hoja-ped${noSalio ? ' no-salio' : ''}`} key={p.im_comprobante_id}>
                                     <div>
                                         <div className="hr-ped-cli">
                                             <span>{p.cliente_nombre ?? `Cliente`}</span>
+                                            {noSalio && (
+                                                <span className="hr-badge grave" title={`No salió: ${p.estado_entrega_motivo ?? ''}. No cuenta en la liquidación del chofer.`}>no salió</span>
+                                            )}
                                             {/* Lo que se emitió queda a la vista: es el registro de qué salió de
                                                 este presupuesto, y en IM ese vínculo no existe. */}
                                             {emitido && (
@@ -1076,6 +1115,12 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                                         </div>
                                         {p.importe_error && <div className="hr-sinpeso" role="status">Importe por verificar: {p.importe_error}</div>}
                                     </div>
+                                    {puedeMarcarEntregas && (
+                                        <button className="hr-btn ghost chico hr-no-salio" onClick={() => void marcarNoSalio(h, p, !noSalio)} disabled={trabajando}
+                                                title={noSalio ? 'Volver a contarla en la liquidación' : 'La mercadería no salió: deja de contar en la liquidación del chofer'}>
+                                            {noSalio ? 'Salió' : 'No salió'}
+                                        </button>
+                                    )}
                                     <button
                                         className="hr-icono"
                                         title={cerrada ? 'La hoja está cerrada: reabrila para sacar pedidos' : 'Sacar de la hoja'}

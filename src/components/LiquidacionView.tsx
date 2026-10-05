@@ -31,12 +31,16 @@ interface ChoferLiq {
     notas_credito: number;
     /** Lo que se entregó de verdad: la base del pago. */
     importe: number;
+    /** 🔄 05/10/2026: marcadas «no salió» en la hoja. No se pagan; se muestran para explicar el total. */
+    no_salieron?: { entregas: number; importe: number };
     numeros: number[];
 }
 
-interface TotalesLiq { hojas: number; pedidos: number; kg: number; importe: number }
+interface TotalesLiq { hojas: number; pedidos: number; kg: number; importe: number; no_salieron?: { entregas: number; importe: number } }
 
 const money = (n: number) => '$' + Math.round(n).toLocaleString('es-AR');
+/** 🔄 05/10/2026: la base del pago va con centavos; es el número que se compara contra el Excel. */
+const pesos = (n: number) => '$' + Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const kilos = (n: number) => n.toLocaleString('es-AR', { maximumFractionDigits: 0 }) + ' kg';
 const mesActual = () => new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 7);
 const plural = (n: number, s: string) => `${n} ${s}${n === 1 ? '' : 's'}`;
@@ -133,7 +137,7 @@ export function LiquidacionView() {
                     <div><span>Hojas cerradas</span><b>{totales.hojas}</b></div>
                     <div><span>Pedidos</span><b>{totales.pedidos}</b></div>
                     <div><span>Kilos</span><b>{kilos(totales.kg ?? 0)}</b></div>
-                    <div className="importe"><span>Entregado en el mes</span><b>{money(totales.importe ?? 0)}</b></div>
+                    <div className="importe"><span>Entregado en el mes</span><b>{pesos(totales.importe ?? 0)}</b></div>
                 </div>
             )}
 
@@ -150,13 +154,19 @@ export function LiquidacionView() {
                     <div className="lq-chofer-head" onClick={() => setAbierto(a => a === (c.chofer_id ?? 'sin') ? null : (c.chofer_id ?? 'sin'))}>
                         <span className="lq-nombre">{c.chofer}</span>
                         <span className="lq-meta">{plural(c.hojas, 'hoja')} · {plural(c.pedidos, 'pedido')} · {plural(c.clientes, 'cliente')} · {kilos(c.kg)}</span>
-                        <b className="lq-importe">{money(c.importe)}</b>
+                        <b className="lq-importe">{pesos(c.importe)}</b>
                     </div>
 
                     {/* El desglose sólo aparece si hubo devoluciones: si no, es ruido. */}
                     {c.notas_credito > 0 && (
                         <div className="lq-desglose">
                             despachó {money(c.despachado)} · volvió {money(c.notas_credito)} en notas de crédito
+                        </div>
+                    )}
+
+                    {!!c.no_salieron?.entregas && (
+                        <div className="lq-desglose">
+                            no {c.no_salieron.entregas === 1 ? 'salió 1 entrega' : `salieron ${c.no_salieron.entregas} entregas`} por {pesos(c.no_salieron.importe)}: no se pagan (marcadas en la hoja)
                         </div>
                     )}
 

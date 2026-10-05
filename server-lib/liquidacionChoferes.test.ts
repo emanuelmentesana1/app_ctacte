@@ -75,6 +75,31 @@ describe('liquidación mensual', () => {
     expect(r.body.totales).toMatchObject({ hojas: 3, pedidos: 4, importe: 670000 });
   });
 
+  /**
+   * 🔄 05/10/2026 (Mati): LEAL y BUSTOS (hoja 3402) no salieron —sus remitos se anularon el 29/09— y
+   * la liquidación de NIÑO los seguía sumando. Se marcan «no salió» en la hoja y dejan de contar.
+   */
+  it('🔴 una entrega marcada «no salió» no se le paga al chofer y se muestra aparte', async () => {
+    tablas['hojas_ruta'] = { data: [hoja({ hojas_ruta_pedidos: [
+      { im_comprobante_id: '70001', cod_cliente: 1, total: 100000, bultos: 10, kg: 400 },
+      { im_comprobante_id: '70002', cod_cliente: 2, total: 50000, bultos: 5, kg: 200, estado_entrega: 'no_salio', estado_entrega_motivo: 'remito anulado' },
+    ] })], error: null };
+    const r = await llamar(liquidacionMensual, { query: { mes: '2026-09' } });
+    expect(r.body.choferes[0]).toMatchObject({ chofer: 'NIÑO', hojas: 1, pedidos: 1, clientes: 1, kg: 400, importe: 100000,
+      no_salieron: { entregas: 1, importe: 50000 } });
+    expect(r.body.totales).toMatchObject({ importe: 100000, no_salieron: { entregas: 1, importe: 50000 } });
+  });
+
+  it('🔴 las notas de una entrega que no salió tampoco cuentan: no se descuenta dos veces', async () => {
+    tablas['hojas_ruta'] = { data: [hoja({ hojas_ruta_pedidos: [
+      { im_comprobante_id: '70001', cod_cliente: 1, total: 100000, bultos: 10, kg: 400 },
+      { im_comprobante_id: '70002', cod_cliente: 2, total: 50000, bultos: 5, kg: 200, estado_entrega: 'no_salio' },
+    ] })], error: null };
+    tablas['hojas_ruta_ajustes'] = { data: [ajuste({ im_comprobante_id: '70002', importe: 30000 })], error: null };
+    const r = await llamar(liquidacionMensual, { query: { mes: '2026-09' } });
+    expect(r.body.choferes[0]).toMatchObject({ importe: 100000, notas_credito: 0 });
+  });
+
   it('🔴 una hoja ABIERTA no se liquida: todavía puede cambiar', async () => {
     tablas['hojas_ruta'] = { data: [hoja({ estado: 'abierta' })], error: null };
     const r = await llamar(liquidacionMensual, { query: { mes: '2026-09' } });

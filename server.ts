@@ -61,7 +61,7 @@ import { listRebotes, listRecargos, syncRebotesNow, syncRebotes } from './server
 import { listProductGoals, upsertProductGoal, deleteProductGoal, searchArticulos, hermanosDeFamilia } from './server-lib/productGoals.js';
 import { guardarKilajeDeBolsa } from './server-lib/kilajeDeBolsa.js';
 import { crearPedido, listPedidos, getPedidoById, anularPedido, creditoCliente, precioArticulo, catalogoPedido, validarListasPedido, editarPedido } from './server-lib/pedidos.js';
-import { pendientesDelDia, arrastreDelDia, impresionHoja, sugerenciaDelDia, listarHojas, listarCamiones, crearHoja, editarHoja, borrarHoja, asignarPedidos, quitarPedido } from './server-lib/hojasRuta.js';
+import { pendientesDelDia, arrastreDelDia, impresionHoja, sugerenciaDelDia, listarHojas, listarCamiones, crearHoja, editarHoja, borrarHoja, asignarPedidos, quitarPedido, marcarEstadoEntrega } from './server-lib/hojasRuta.js';
 import { tableroFacturacion, previsualizarFacturacion, facturarSeleccion, liberarReclamo, habilitarRemitoPendiente, registrarRemitoExistente, registrarFacturaExistente } from './server-lib/facturarPresupuestos.js';
 import { descartarRemitoSobrante, habilitarFacturaPendiente, anularFacturaEmitida } from './server-lib/conciliarEmision.js';
 // Corregir una factura ya emitida, con notas de crédito y de débito.
@@ -795,6 +795,8 @@ app.delete('/api/hojas-ruta/ajustes/:id', requireJwt, (req: any, res) => borrarA
 app.get('/api/hojas-ruta', requireJwt, (req: any, res) => listarHojas(req, res));
 app.post('/api/hojas-ruta', requireJwt, (req: any, res) => crearHoja(req, res));
 app.post('/api/hojas-ruta/:id/pedidos', requireJwt, (req: any, res) => asignarPedidos(req, res));
+// «No salió» (05/10/2026): la entrega deja de contar en la liquidación del chofer. Sólo admin y gerente.
+app.post('/api/hojas-ruta/:id/entregas/:comprobanteId/estado', requireJwt, (req: any, res) => marcarEstadoEntrega(req, res));
 app.get('/api/hojas-ruta/:id/impresion', requireJwt, (req: any, res) => impresionHoja(req, res));
 // Lo que se ajusta cuando vuelve el repartidor: emite notas de crédito REALES en InfoManager.
 app.get('/api/hojas-ruta/:id/ajustes', requireJwt, (req: any, res) => listarAjustes(req, res));

@@ -356,3 +356,7 @@ button.hr-badge { cursor: pointer; font-family: inherit; }
     font-size: 0.78rem;
     line-height: 1.3;
 }
+
+/* 🔄 05/10/2026: «No salió». La entrega se ve tachada; no cuenta en la liquidación del chofer. */
+.hr-hoja-ped.no-salio .hr-ped-cli > span:first-child, .hr-hoja-ped.no-salio .hr-ped-meta { text-decoration: line-through; color: var(--color-text-muted); }
+.hr-no-salio { flex: 0 0 auto; white-space: nowrap; }

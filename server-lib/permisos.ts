@@ -65,6 +65,14 @@ export function puedeArmarHojasDeRuta(rol: string): boolean {
 }
 
 /**
+ * ¿Puede marcar que una entrega «no salió»? Mati (05/10/2026): sólo admin y gerente. Cambia lo que se
+ * le paga a un chofer, también en hojas ya cerradas.
+ */
+export function puedeMarcarEntrega(rol: string): boolean {
+    return MANDO.has(rol);
+}
+
+/**
  * ¿Puede editar o borrar una actividad (visita, nota, PROMESA DE PAGO) que cargó otro?
  *
  * 🪤 El comentario de `deleteActivity` decía "solo propia o admin" y el código dejaba borrar
