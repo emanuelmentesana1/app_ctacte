@@ -221,6 +221,24 @@ try {
     } finally { await ctx.close(); }
   });
 
+  await test('Vendedor: el medio de pago no viene elegido; sin elegirlo no deja enviar', async () => {
+    const { page, ctx } = await abrir(julio);
+    try {
+      await page.locator('.vs-nav-btn', { hasText: 'Cobranzas' }).click();
+      await page.locator('.vs-client[data-client-cod="722"] .vs-qa.pay').click();
+      await page.locator('.rec-upload').waitFor();
+      const medio = page.locator('.rec-field select').first();
+      assert(await medio.inputValue() === '', `El medio viene elegido de fábrica: ${await medio.inputValue()}`);
+      await page.locator('.rec-upload input[type="file"]').setInputFiles({ name: 'c.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4') });
+      await page.locator('.rec-field input[inputmode="decimal"]').fill('250000');
+      await page.locator('.rec-field input[type="date"]').fill('2026-10-02');
+      const enviar = page.locator('.rec-form-actions .btn-primary');
+      assert(await enviar.isDisabled(), 'Deja enviar sin elegir el medio');
+      await medio.selectOption('recaudadora_1');
+      assert(await enviar.isEnabled(), 'Con el medio elegido tiene que dejar enviar');
+    } finally { await ctx.close(); }
+  });
+
   await test('Anto: el detalle avisa si el pago ya figura en IM y deja rechazarlo en un toque', async () => {
     const { page, ctx } = await abrir(anto, { duplicados: () => enIM });
     try {

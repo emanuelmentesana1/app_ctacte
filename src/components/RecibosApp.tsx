@@ -3,7 +3,7 @@ import { X, Camera, Upload, Check, AlertCircle, ChevronLeft, Loader2, Search, Cl
 import { authHeaders, getUser } from '../utils/auth';
 import { buscarClientes } from '../utils/buscarClientes';
 import { formatCurrency, formatCurrency2 } from '../utils/formatters';
-import { MEDIOS_PAGO_UI, DEFAULT_MEDIO_UI, normalizeMedioUI, exigeFotoUI } from '../utils/mediosPago';
+import { MEDIOS_PAGO_UI, normalizeMedioUI, exigeFotoUI } from '../utils/mediosPago';
 import { preseleccionFIFO, siguienteEnCola } from '../utils/aprobacionRecibos';
 import { leerComprobante } from '../utils/ocrNavegador';
 import type { DatosComprobante } from '../utils/ocrComprobante';
@@ -660,7 +660,9 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, cl
     // con hoy y muchos vendedores no la modificaban, lo que terminaba grabando
     // en IM la fecha de subida en vez de la del comprobante.
     const [fecha, setFecha] = useState<string>('');
-    const [medioPago, setMedioPago] = useState<string>(DEFAULT_MEDIO_UI);
+    // Sin medio elegido de fábrica (Mati, 06/10/2026): venía "MercadoPago" y 26 pagos a la Recaudadora 1
+    // quedaron cargados así entre mayo y septiembre. Quien carga lo elige siempre.
+    const [medioPago, setMedioPago] = useState<string>('');
     const [observaciones, setObservaciones] = useState('');
     // Si se llegó desde la tarjeta de un cliente, la lista ya viene filtrada a ese cliente.
     const [clientSearch, setClientSearch] = useState(() =>
@@ -754,6 +756,7 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, cl
             return;
         }
         if (!codCliente) { setMsg({ kind: 'err', text: 'Elegí el cliente' }); return; }
+        if (!medioPago) { setMsg({ kind: 'err', text: 'Elegí el medio de pago' }); return; }
         const montoNum = Number(monto);
         if (!monto || !isFinite(montoNum) || montoNum <= 0) { setMsg({ kind: 'err', text: 'Ingresá el monto del pago' }); return; }
         if (!fecha) { setMsg({ kind: 'err', text: 'Ingresá la fecha del comprobante (la que aparece en el recibo, no la de hoy)' }); return; }
@@ -887,7 +890,8 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, cl
                 <div className="rec-row">
                     <label className="rec-field">
                         <span>Medio</span>
-                        <select value={medioPago} onChange={e => setMedioPago(e.target.value)}>
+                        <select value={medioPago} onChange={e => setMedioPago(e.target.value)} style={!medioPago ? { borderColor: '#c00' } : undefined}>
+                            <option value="" disabled>Elegí el medio de pago…</option>
                             {MEDIOS_PAGO_UI.map(m => (
                                 <option key={m.value} value={m.value}>{m.label}</option>
                             ))}
@@ -941,7 +945,7 @@ function UploadRecibo({ clients, defaultCodVendedor, hideCodVendedor = false, cl
                 <div className="rec-form-actions">
                     <button className="btn-secondary" onClick={onCancel} disabled={busy}>Cancelar</button>
                     <button className="btn-primary" onClick={submit}
-                        disabled={busy || (!file && exigeFotoUI(medioPago)) || !codCliente || !monto || !(Number(monto) > 0) || pideConfirmar}
+                        disabled={busy || !medioPago || (!file && exigeFotoUI(medioPago)) || !codCliente || !monto || !(Number(monto) > 0) || pideConfirmar}
                         title={!monto ? 'Cargá el monto del comprobante' : undefined}>
                         {busy ? <><Loader2 size={16} className="spin" /> Enviando…</> : <><Upload size={16} /> Enviar comprobante</>}
                     </button>
@@ -1012,8 +1016,8 @@ function AvisoFoto({ datos, monto, fecha, medio, onMedio }: {
         const destino = datos.medio;
         difiere.push(
             <li key="medio">
-                La transferencia fue a la {etiqueta(destino)} y elegiste {etiqueta(medio)}.
-                <button type="button" className="rec-foto-cambiar" onClick={() => onMedio(destino)}>Cambiar a {etiqueta(destino)}</button>
+                {medio ? <>La transferencia fue a la {etiqueta(destino)} y elegiste {etiqueta(medio)}.</> : <>La transferencia fue a la {etiqueta(destino)}.</>}
+                <button type="button" className="rec-foto-cambiar" onClick={() => onMedio(destino)}>{medio ? 'Cambiar a' : 'Elegir'} {etiqueta(destino)}</button>
             </li>,
         );
     }
