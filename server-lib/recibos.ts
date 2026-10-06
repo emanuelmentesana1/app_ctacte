@@ -847,6 +847,21 @@ export async function editarRecibo(req: Request & { user?: JwtPayload }, res: Re
       }
     }
 
+    // 🔴 Mati (06/10/2026, MONTENORT): un recibo ya emitido en IM no se cambia SÓLO acá. Cliente, monto, fecha o
+    // medio distintos dejan la app y IM distintos: eso va por «Corregir en IM» (POST /api/recibos/:id/corregir).
+    if (comp.status === 'imputado') {
+      const distinto = (update.cod_cliente !== undefined && Number(update.cod_cliente) !== Number(comp.cod_cliente))
+        || (update.monto !== undefined && Math.abs(Number(update.monto) - Number(comp.monto)) >= 0.01)
+        || (update.fecha_comprobante !== undefined && (update.fecha_comprobante ?? null) !== (comp.fecha_comprobante ?? null))
+        || (update.medio_pago !== undefined && (update.medio_pago ?? null) !== (comp.medio_pago ?? null));
+      if (distinto) {
+        const rc = comp.infomanager_response?.recibo?.numero ?? comp.infomanager_recibo_id;
+        res.status(409).json({ error: `Este recibo ya está en InfoManager (RC ${rc}). Cambiar el cliente, el monto, la fecha o el medio sólo acá deja la app y IM distintos: usá «Corregir en IM».`, corregir_en_im: true });
+        return;
+      }
+      for (const k of ['cod_cliente', 'monto', 'fecha_comprobante', 'medio_pago']) delete update[k];
+    }
+
     // Reapertura: rechazado/error/aprobado(anticipo) → pendiente_revision para
     // reprocesar o deshacer un anticipo registrado por error.
     if (body.reabrir === true) {

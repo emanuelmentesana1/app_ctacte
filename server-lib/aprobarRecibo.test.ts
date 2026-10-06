@@ -38,6 +38,7 @@ vi.mock('./supabase.js', () => ({
       const q: any = {
         select: () => q, eq: () => q, neq: () => q,
         maybeSingle: async () => ({ data: m.comp, error: null }),
+        single: async () => ({ data: { ...m.comp, ...m.updates.at(-1) }, error: null }),
         update: (v: any) => { m.updates.push(v); return q; },
         then: (r: any, j: any) => Promise.resolve({ data: null, error: null }).then(r, j),
       };
@@ -47,7 +48,7 @@ vi.mock('./supabase.js', () => ({
 }));
 
 process.env.INFOMANAGER_USUARIO = 'matias';
-const { aprobarRecibo, cuentasEfectivo } = await import('./recibos.js');
+const { aprobarRecibo, cuentasEfectivo, editarRecibo } = await import('./recibos.js');
 
 const PENDIENTE = { id: 'FA1', saldo: 300_000, tipo_comprobante: 'FA' };
 function req(body: Record<string, unknown> = {}, rol = 'administrativo') {
@@ -225,5 +226,33 @@ describe('aprobarRecibo — registra sus tiempos (S32 · mejora 9)', () => {
     const t = resumenTiempos();
     expect(t['recibo.aprobar']?.n).toBe(1);
     expect(t['im.recibo.post']?.n).toBe(1);
+  });
+});
+
+describe('editarRecibo — un recibo ya emitido no se cambia sólo en la app (Mati, 06/10/2026: MONTENORT)', () => {
+  const emitido = () => ({ ...m.comp, status: 'imputado', infomanager_recibo_id: '59024166', infomanager_response: { recibo: { numero: 30156202 } } });
+  const editar = async (body: Record<string, unknown>) => { const r = res(); await editarRecibo({ params: { id: 'r1' }, user: { sub: 'u-mati', rol: 'admin' }, body } as any, r); return r; };
+
+  it('🔴 cambiar el medio, el monto, el cliente o la fecha de un recibo emitido lleva a «Corregir en IM»', async () => {
+    for (const cambio of [{ medio_pago: 'recaudadora_1' }, { monto: 250_050 }, { cod_cliente: 723 }, { fecha_comprobante: '2026-10-03' }]) {
+      m.comp = emitido(); m.updates = [];
+      const r = await editar(cambio);
+      expect(r.statusCode, JSON.stringify(cambio)).toBe(409);
+      expect(r.body).toMatchObject({ corregir_en_im: true });
+      expect(m.updates).toHaveLength(0);
+    }
+  });
+
+  it('los textos (referencia, observaciones) se siguen corrigiendo en la app, y mandar lo mismo no frena', async () => {
+    m.comp = emitido();
+    const r = await editar({ observaciones: 'Aclaración', medio_pago: 'mercadopago', monto: 250_000, cod_cliente: 722, fecha_comprobante: '2026-10-02' });
+    expect(r.statusCode).toBe(200);
+    expect(m.updates.at(-1)).toMatchObject({ observaciones: 'Aclaración' });
+  });
+
+  it('un recibo sin emitir se edita como siempre', async () => {
+    m.comp = { ...m.comp, status: 'pendiente_revision' };
+    const r = await editar({ medio_pago: 'recaudadora_1', monto: 250_050 });
+    expect(r.statusCode).toBe(200);
   });
 });

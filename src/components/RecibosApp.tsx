@@ -53,6 +53,8 @@ interface ReciboRow {
     factura_asociada: string | null;
     cod_empresa: number | null;
     infomanager_recibo_id: string | null;
+    /** Lo que devolvió IM al emitirlo: de acá sale el número de recibo (RC). */
+    infomanager_response?: { recibo?: { numero?: number | string | null } } | null;
     motivo_rechazo: string | null;
     error_msg: string | null;
     created_at: string;
@@ -1775,12 +1777,60 @@ function EditarReciboForm({ rec, clients, onSaved, onCancel }: {
         [clients, codCliente]
     );
 
+    const numeroIM = rec.infomanager_response?.recibo?.numero ?? null;
+    const etiquetaMedio = (m: string) => MEDIOS_PAGO_UI.find(x => x.value === m)?.label ?? m;
+    const postear = async (ruta: string, cuerpo: unknown) => {
+        const r = await fetch(`/api/recibos/${rec.id}${ruta}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(cuerpo),
+        });
+        const d = await r.json().catch(() => ({}));
+        return { ok: r.ok && d.ok, d };
+    };
+    /**
+     * Un recibo ya emitido (Mati, 06/10/2026, MONTENORT): lo que cambia en IM no se guarda sólo acá. El medio (la cuenta)
+     * se corrige en IM con el mismo número, después de confirmar; monto, cliente y fecha todavía van a mano en IM.
+     * Los textos se guardan acá, como siempre.
+     */
+    const guardarEmitido = async (montoNum: number) => {
+        const cambiosIM: Record<string, unknown> = {};
+        if (Number(codCliente) !== Number(rec.cod_cliente)) cambiosIM.cod_cliente = Number(codCliente);
+        if (Math.abs(montoNum - Number(rec.monto)) >= 0.01) cambiosIM.monto = montoNum;
+        if ((fecha || null) !== (rec.fecha_comprobante ?? null)) cambiosIM.fecha_comprobante = fecha;
+        if (medio !== normalizeMedioUI(rec.medio_pago)) cambiosIM.medio_pago = medio;
+        let enIM = false;
+        if (Object.keys(cambiosIM).length) {
+            const plan = await postear('/corregir', { accion: 'plan', cambios: cambiosIM });
+            if (!plan.ok) { setMsg({ kind: 'err', text: plan.d.error || 'No se pudo revisar el recibo en IM' }); return; }
+            const p = plan.d.plan;
+            if (p.tipo === 'no_se_puede') { setMsg({ kind: 'err', text: p.motivo }); return; }
+            if (p.tipo === 'anular_reemitir') {
+                setMsg({ kind: 'err', text: 'Cambiar el monto, el cliente o la fecha de un recibo ya emitido todavía se corrige a mano en IM: anulalo allá y cargalo de nuevo.' });
+                return;
+            }
+            if (p.tipo === 'cuenta' && !window.confirm(`En InfoManager, el recibo ${plan.d.recibo_im ?? ''} pasa de ${etiquetaMedio(normalizeMedioUI(rec.medio_pago))} (cuenta ${p.desde}) a ${etiquetaMedio(medio)} (cuenta ${p.hacia}).\n\nConserva el número, el importe y las facturas. Queda registrado quién lo corrigió.\n\n¿Corregir en IM?`)) return;
+            const hecho = await postear('/corregir', { accion: 'corregir', cambios: cambiosIM });
+            if (!hecho.ok) { setMsg({ kind: 'err', text: hecho.d.error || 'No se pudo corregir en IM' }); return; }
+            enIM = p.tipo === 'cuenta';
+        }
+        const textos: Record<string, string | null> = {};
+        if ((bancoOrigen || null) !== (rec.banco_origen ?? null)) textos.banco_origen = bancoOrigen || null;
+        if ((referencia || null) !== (rec.referencia ?? null)) textos.referencia = referencia || null;
+        if ((observaciones || null) !== (rec.observaciones ?? null)) textos.observaciones = observaciones || null;
+        if (Object.keys(textos).length) {
+            const t = await postear('/editar', textos);
+            if (!t.ok) { setMsg({ kind: 'err', text: t.d.error || 'No se pudieron guardar los cambios' }); return; }
+        }
+        setMsg({ kind: 'ok', text: enIM ? 'Corregido en IM y en la app' : 'Cambios guardados' });
+        setTimeout(onSaved, enIM ? 1500 : 700);
+    };
+
     const save = async () => {
         const montoNum = Number(monto);
         if (!codCliente || Number(codCliente) <= 0) { setMsg({ kind: 'err', text: 'Cargá el cliente' }); return; }
         if (!monto || !isFinite(montoNum) || montoNum <= 0) { setMsg({ kind: 'err', text: 'El monto debe ser mayor a 0' }); return; }
         setBusy(true); setMsg(null);
         try {
+            if (rec.status === 'imputado') { await guardarEmitido(montoNum); return; }
             const res = await fetch(`/api/recibos/${rec.id}/editar`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -1811,9 +1861,9 @@ function EditarReciboForm({ rec, clients, onSaved, onCancel }: {
                 <div className="rec-msg rec-msg--err">
                     <AlertCircle size={16} />
                     <span>
-                        Este recibo ya está imputado en InfoManager. Editar acá corrige
-                        solo el registro de esta app — el recibo emitido en InfoManager
-                        NO se modifica.
+                        Este recibo ya está en InfoManager{numeroIM ? ` (RC ${numeroIM})` : ''}. Si cambiás el medio de
+                        pago, al guardar se va a corregir en IM también, con el mismo número y después de confirmar
+                        (sólo admin o gerente). El monto, el cliente y la fecha todavía se corrigen a mano en IM.
                     </span>
                 </div>
             )}

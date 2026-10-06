@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { puedeTocarPedido, puedeTocarActividadAjena, veCobranzasDeTodos, puedeRevisarRecibos } from './permisos.js';
+import { puedeTocarPedido, puedeTocarActividadAjena, veCobranzasDeTodos, puedeRevisarRecibos, puedeCorregirRecibosEnIM } from './permisos.js';
 
 /**
  * Los 7 roles que existen de verdad en la base (01/09/2026):
@@ -114,5 +114,15 @@ describe('puedeRevisarRecibos — imputar, aprobar y rechazar cobranzas', () => 
         for (const rol of ROLES.filter(r => !['admin', 'gerente', 'administrativo'].includes(r))) {
             expect(puedeRevisarRecibos(rol), rol).toBe(false);
         }
+    });
+});
+
+describe('puedeCorregirRecibosEnIM — editar o anular en IM un recibo ya emitido (Mati, 06/10/2026)', () => {
+    it('🔑 sólo admin y gerente: toca InfoManager con el usuario de Mati', () => {
+        expect(puedeCorregirRecibosEnIM('admin')).toBe(true);
+        expect(puedeCorregirRecibosEnIM('gerente')).toBe(true);
+    });
+    it('🔴 administrativo aprueba recibos pero no los corrige en IM; el resto, menos', () => {
+        for (const rol of ['administrativo', 'vendedor', 'repartidor', 'encargado', 'socio', '']) expect(puedeCorregirRecibosEnIM(rol), rol).toBe(false);
     });
 });

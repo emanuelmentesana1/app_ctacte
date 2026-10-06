@@ -31,6 +31,7 @@ import {
 } from './server-lib/recibos.js';
 import { posiblesDuplicadosRecibo } from './server-lib/recibosDuplicados.js';
 import { aprobarEnLote } from './server-lib/recibosLote.js';
+import { corregirRecibo } from './server-lib/corregirRecibo.js';
 import { controlRecibosIM } from './server-lib/recibosControlIM.js';
 import { tiemposRecibos } from './server-lib/tiempos.js';
 import { listGoals, setGoal, syncVentasNow, setMonthConfig, listClientesObjetivo, debugClienteAvance, getGoalsSnapshot, botGoals, codsVendedoresActivos } from './server-lib/goals.js';
@@ -692,6 +693,8 @@ app.get('/api/recibos/:id/facturas-candidatas', requireJwt, (req: any, res) => f
 app.post('/api/recibos/:id/aprobar', requireJwt, (req: any, res) => aprobarRecibo(req, res));
 app.post('/api/recibos/:id/rechazar', requireJwt, (req: any, res) => rechazarRecibo(req, res));
 app.post('/api/recibos/:id/editar', requireJwt, (req: any, res) => editarRecibo(req, res));
+// «Corregir en IM» un recibo ya emitido: plan y corrección, sólo admin o gerente (Mati, 06/10/2026).
+app.post('/api/recibos/:id/corregir', requireJwt, (req: any, res) => corregirRecibo(req, res));
 app.post('/api/recibos/:id/reverificar-mp', requireJwt, (req: any, res) => reverificarMP(req, res));
 app.post('/api/recibos/:id/elegir-match', requireJwt, (req: any, res) => elegirMatchMP(req, res));
 

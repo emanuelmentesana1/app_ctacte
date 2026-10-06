@@ -111,3 +111,11 @@ export function veCobranzasDeTodos(rol: string, veTodaLaEmpresa = false): boolea
 export function puedeRevisarRecibos(rol: string): boolean {
     return MANDO.has(rol) || rol === 'administrativo';
 }
+
+/**
+ * ¿Puede corregir en InfoManager un recibo que la app ya emitió (cambiar la cuenta, anular y reemitir)? Sólo mando:
+ * Mati (06/10/2026) — toca IM con SU usuario de IM5. `administrativo` aprueba recibos pero no los corrige en IM.
+ */
+export function puedeCorregirRecibosEnIM(rol: string): boolean {
+    return MANDO.has(rol);
+}

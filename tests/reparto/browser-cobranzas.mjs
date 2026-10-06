@@ -12,6 +12,7 @@ import { browser, results, out, base, reply, assert, test } from './browser-fixt
 
 const anto = { id: 'u-anto', rol: 'administrativo', nombre: 'Anto', email: 'anto@example.invalid', cod_vendedor: null };
 const julio = { id: 'u-julio', rol: 'vendedor', nombre: 'Julio', email: 'julio@example.invalid', cod_vendedor: 4 };
+const mati = { id: 'u-mati', rol: 'admin', nombre: 'Matías', email: 'mati@example.invalid', cod_vendedor: null };
 const clientes = [{ cod: '722', name: 'CLIENTE ALFA' }, { cod: '815', name: 'CLIENTE BETA' }];
 const recibo = (id, cod, monto) => ({
   id, cod_cliente: Number(cod), cod_vendedor: 4, monto, fecha_comprobante: '2026-10-02', medio_pago: 'mercadopago',
@@ -36,7 +37,7 @@ const invoices = [
   { COD_CLIENT: '815', CLIENTES_N: 'CLIENTE BETA', SALDO: 80_000, DIAS_EMISI: 4 },
 ];
 
-async function abrir(user, { alAprobar, duplicados, lote, controlIM, alSubir } = {}) {
+async function abrir(user, { alAprobar, duplicados, lote, controlIM, alSubir, recibos, alCorregir } = {}) {
   const ctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   await ctx.addInitScript(() => localStorage.setItem('auth_token', 'audit-local-only'));
   const page = await ctx.newPage();
@@ -70,7 +71,7 @@ async function abrir(user, { alAprobar, duplicados, lote, controlIM, alSubir } =
       alSubir?.(route.request().postData() ?? '');
       return reply(route, { ok: true, comprobante: { id: 'nuevo' }, ocr: null });
     }
-    if (u.pathname === '/api/recibos') return reply(route, { ok: true, recibos: pendientes, periodo: 'últimos 30 días', truncado: false });
+    if (u.pathname === '/api/recibos') return reply(route, { ok: true, recibos: recibos ?? pendientes, periodo: 'últimos 30 días', truncado: false });
     let m = u.pathname.match(/^\/api\/recibos\/(r\d)\/facturas-candidatas$/);
     if (m) return reply(route, { ok: true, cod_cliente: 0, cod_empresa: 1, facturas: facturasDe[m[1]] ?? [] });
     m = u.pathname.match(/^\/api\/recibos\/(r\d)\/aprobar$/);
@@ -78,8 +79,10 @@ async function abrir(user, { alAprobar, duplicados, lote, controlIM, alSubir } =
       alAprobar?.(m[1], JSON.parse(route.request().postData() || '{}'));
       return reply(route, { ok: true, recibo_id: '5899900' + m[1].slice(1) });
     }
+    m = u.pathname.match(/^\/api\/recibos\/(r\d)\/corregir$/);
+    if (m && metodo === 'POST') return reply(route, alCorregir ? alCorregir(JSON.parse(route.request().postData() || '{}')) : { error: 'sin fixture' }, alCorregir ? 200 : 501);
     m = u.pathname.match(/^\/api\/recibos\/(r\d)$/);
-    if (m) return reply(route, { ok: true, recibo: detalle(pendientes.find(r => r.id === m[1])) });
+    if (m) { const r = (recibos ?? pendientes).find(x => x.id === m[1]); return reply(route, { ok: true, recibo: { ...detalle(r), ...r } }); }
     return reply(route, { error: 'Ruta sin fixture: ' + u.pathname }, 501);
   });
   await page.goto(base + '/');
@@ -236,6 +239,40 @@ try {
       assert(await enviar.isDisabled(), 'Deja enviar sin elegir el medio');
       await medio.selectOption('recaudadora_1');
       assert(await enviar.isEnabled(), 'Con el medio elegido tiene que dejar enviar');
+    } finally { await ctx.close(); }
+  });
+
+  await test('Mati: cambiar el medio de un recibo ya emitido lo corrige también en IM, con confirmación (MONTENORT)', async () => {
+    const emitido = { ...recibo('r3', '722', 418_719), status: 'imputado', infomanager_recibo_id: '59024166', infomanager_response: { recibo: { numero: 30156202 } } };
+    const pedidos = [];
+    const { page, ctx } = await abrir(mati, { recibos: [emitido], alCorregir: body => {
+      pedidos.push(body);
+      if (body.cambios?.monto !== undefined) return { ok: true, plan: { tipo: 'anular_reemitir', motivos: ['cambia el monto'] }, recibo_im: '30156202' };
+      return { ok: true, plan: { tipo: 'cuenta', desde: '1120003', hacia: '1120005' }, recibo_im: '30156202' };
+    } });
+    try {
+      await page.locator('button[title="Cargar pago"]').click();
+      await page.locator('.rec-chip', { hasText: 'Imputado' }).click();
+      await page.locator('.rec-item', { hasText: 'CLIENTE ALFA' }).click();
+      await page.locator('.rec-detail-tools button', { hasText: 'Editar datos del recibo' }).click();
+      const form = page.locator('.rec-edit');
+      assert(/corregir en IM/i.test(await form.innerText()), 'No explica que el cambio va también a IM');
+      // El monto todavía se corrige a mano en IM: lo dice y no corrige nada.
+      await form.locator('input[type=number]').first().fill('418769');
+      await form.locator('button', { hasText: 'Guardar cambios' }).click();
+      await form.locator('.rec-msg--err').waitFor();
+      assert(/a mano en IM/i.test(await form.locator('.rec-msg--err').innerText()), 'No dice que el monto se corrige a mano');
+      assert(!pedidos.some(p => p.accion === 'corregir'), 'Mandó a corregir algo que todavía no se hace');
+      await form.locator('input[type=number]').first().fill('418719');
+      // El medio (la cuenta): se confirma y se corrige en IM.
+      await form.locator('select').first().selectOption('recaudadora_1');
+      let pregunta = '';
+      page.once('dialog', d => { pregunta = d.message(); d.accept(); });
+      await form.locator('button', { hasText: 'Guardar cambios' }).click();
+      await page.getByText('Corregido en IM', { exact: false }).first().waitFor();
+      assert(/30156202/.test(pregunta) && /1120005/.test(pregunta), `La confirmación no dice qué pasa en IM: ${pregunta}`);
+      const ultimo = pedidos.at(-1);
+      assert(ultimo?.accion === 'corregir' && ultimo?.cambios?.medio_pago === 'recaudadora_1' && ultimo?.cambios?.monto === undefined, `No pidió la corrección justa: ${JSON.stringify(ultimo)}`);
     } finally { await ctx.close(); }
   });
 
