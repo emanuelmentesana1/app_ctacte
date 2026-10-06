@@ -12,7 +12,6 @@ import { browser, results, out, base, reply, assert, test } from './browser-fixt
 
 const anto = { id: 'u-anto', rol: 'administrativo', nombre: 'Anto', email: 'anto@example.invalid', cod_vendedor: null };
 const julio = { id: 'u-julio', rol: 'vendedor', nombre: 'Julio', email: 'julio@example.invalid', cod_vendedor: 4 };
-const mati = { id: 'u-mati', rol: 'admin', nombre: 'Matías', email: 'mati@example.invalid', cod_vendedor: null };
 const clientes = [{ cod: '722', name: 'CLIENTE ALFA' }, { cod: '815', name: 'CLIENTE BETA' }];
 const recibo = (id, cod, monto) => ({
   id, cod_cliente: Number(cod), cod_vendedor: 4, monto, fecha_comprobante: '2026-10-02', medio_pago: 'mercadopago',
@@ -242,14 +241,18 @@ try {
     } finally { await ctx.close(); }
   });
 
-  await test('Mati: cambiar el medio de un recibo ya emitido lo corrige también en IM, con confirmación (MONTENORT)', async () => {
+  await test('Anto: cambiar el medio de un recibo ya emitido lo corrige también en IM, con confirmación (MONTENORT)', async () => {
     const emitido = { ...recibo('r3', '722', 418_719), status: 'imputado', infomanager_recibo_id: '59024166', infomanager_response: { recibo: { numero: 30156202 } } };
     const pedidos = [];
-    const { page, ctx } = await abrir(mati, { recibos: [emitido], alCorregir: body => {
+    const { page, ctx } = await abrir(anto, { recibos: [emitido], alCorregir: body => {
       pedidos.push(body);
-      if (body.cambios?.monto !== undefined) return { ok: true, plan: { tipo: 'anular_reemitir', motivos: ['cambia el monto'] }, recibo_im: '30156202' };
+      const c = body.cambios ?? {};
+      if (c.monto !== undefined || c.cod_cliente !== undefined || c.fecha_comprobante !== undefined) return { ok: true, plan: { tipo: 'anular_reemitir', motivos: ['cambia el monto'] }, recibo_im: '30156202' };
       return { ok: true, plan: { tipo: 'cuenta', desde: '1120003', hacia: '1120005' }, recibo_im: '30156202' };
     } });
+    const dialogos = [];
+    let aceptar = false;
+    page.on('dialog', d => { dialogos.push(d.message()); return aceptar ? d.accept() : d.dismiss(); });
     try {
       await page.locator('button[title="Cargar pago"]').click();
       await page.locator('.rec-chip', { hasText: 'Imputado' }).click();
@@ -257,22 +260,22 @@ try {
       await page.locator('.rec-detail-tools button', { hasText: 'Editar datos del recibo' }).click();
       const form = page.locator('.rec-edit');
       assert(/corregir en IM/i.test(await form.innerText()), 'No explica que el cambio va también a IM');
-      // El monto todavía se corrige a mano en IM: lo dice y no corrige nada.
-      await form.locator('input[type=number]').first().fill('418769');
+      const monto = form.locator('label.rec-field', { hasText: 'Monto' }).locator('input');
+      const medio = form.locator('label.rec-field', { hasText: 'Medio' }).locator('select');
+      // El monto todavía se corrige a mano en IM: lo dice, no pregunta nada y no corrige.
+      await monto.fill('418769');
       await form.locator('button', { hasText: 'Guardar cambios' }).click();
-      await form.locator('.rec-msg--err').waitFor();
-      assert(/a mano en IM/i.test(await form.locator('.rec-msg--err').innerText()), 'No dice que el monto se corrige a mano');
-      assert(!pedidos.some(p => p.accion === 'corregir'), 'Mandó a corregir algo que todavía no se hace');
-      await form.locator('input[type=number]').first().fill('418719');
+      await form.getByText('anulalo allá y cargalo de nuevo', { exact: false }).waitFor();
+      assert(!dialogos.length && !pedidos.some(p => p.accion === 'corregir'), `Con el monto preguntó o corrigió: ${JSON.stringify({ dialogos, pedidos })}`);
+      await monto.fill('418719');
       // El medio (la cuenta): se confirma y se corrige en IM.
-      await form.locator('select').first().selectOption('recaudadora_1');
-      let pregunta = '';
-      page.once('dialog', d => { pregunta = d.message(); d.accept(); });
+      await medio.selectOption('recaudadora_1');
+      aceptar = true;
       await form.locator('button', { hasText: 'Guardar cambios' }).click();
       await page.getByText('Corregido en IM', { exact: false }).first().waitFor();
-      assert(/30156202/.test(pregunta) && /1120005/.test(pregunta), `La confirmación no dice qué pasa en IM: ${pregunta}`);
+      assert(dialogos.length === 1 && /30156202/.test(dialogos[0]) && /1120005/.test(dialogos[0]), `La confirmación no dice qué pasa en IM: ${JSON.stringify(dialogos)}`);
       const ultimo = pedidos.at(-1);
-      assert(ultimo?.accion === 'corregir' && ultimo?.cambios?.medio_pago === 'recaudadora_1' && ultimo?.cambios?.monto === undefined, `No pidió la corrección justa: ${JSON.stringify(ultimo)}`);
+      assert(ultimo?.accion === 'corregir' && JSON.stringify(ultimo.cambios) === JSON.stringify({ medio_pago: 'recaudadora_1' }), `No pidió la corrección justa: ${JSON.stringify(ultimo)}`);
     } finally { await ctx.close(); }
   });
 

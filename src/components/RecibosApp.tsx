@@ -1862,8 +1862,8 @@ function EditarReciboForm({ rec, clients, onSaved, onCancel }: {
                     <AlertCircle size={16} />
                     <span>
                         Este recibo ya está en InfoManager{numeroIM ? ` (RC ${numeroIM})` : ''}. Si cambiás el medio de
-                        pago, al guardar se va a corregir en IM también, con el mismo número y después de confirmar
-                        (sólo admin o gerente). El monto, el cliente y la fecha todavía se corrigen a mano en IM.
+                        pago, al guardar se va a corregir en IM también, con el mismo número y después de confirmar.
+                        El monto, el cliente y la fecha todavía se corrigen a mano en IM.
                     </span>
                 </div>
             )}

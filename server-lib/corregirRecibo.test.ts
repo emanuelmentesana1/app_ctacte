@@ -103,10 +103,16 @@ beforeEach(() => {
 });
 
 describe('Corregir en IM — quién y cuándo', () => {
-  it('🔴 sólo admin o gerente: Anto (administrativo) no corrige en IM', async () => {
-    const r = await corregir(ANTO, { accion: 'corregir', cambios: { medio_pago: 'recaudadora_1' } });
+  it('🔴 un vendedor no corrige en IM', async () => {
+    const r = await corregir({ ...ANTO, rol: 'vendedor' }, { accion: 'corregir', cambios: { medio_pago: 'recaudadora_1' } });
     expect(r.statusCode).toBe(403);
     expect(m.editar).not.toHaveBeenCalled();
+  });
+
+  it('🔑 Anto (administrativo) sí: Mati, 06/10/2026', async () => {
+    const r = await corregir(ANTO, { accion: 'corregir', cambios: { medio_pago: 'recaudadora_1' } });
+    expect(r.statusCode).toBe(200);
+    expect(m.tablas.recibos_correcciones[0]).toMatchObject({ estado: 'hecha', por: 'u-anto' });
   });
 
   it('🔑 el plan dice qué va a pasar en IM y no toca nada', async () => {

@@ -6,7 +6,7 @@
  *  · 'corregir': si sólo cambia la cuenta, edita el recibo en IM5 (mismo número), relee IM para confirmar y recién ahí
  *    cambia la app. Monto, cliente o fecha (anular y reemitir) vienen en la próxima tanda: por ahora, a mano en IM.
  *
- * Sólo admin o gerente. Cada corrección queda en `recibos_correcciones` (migración 060) ANTES de tocar IM: sin
+ * Admin, gerente o administrativo (Anto). Cada corrección queda en `recibos_correcciones` (migración 060) ANTES de tocar IM: sin
  * registro no hay corrección. Qué se hace y qué no vive en `im5Recibos.ts` (puro, con tests).
  */
 import type { Request, Response } from 'express';
@@ -40,7 +40,7 @@ function leerCambios(cuerpo: unknown): (CambiosRecibo & { cod_cuenta?: string })
 
 export async function corregirRecibo(req: Request & { user?: JwtPayload }, res: Response) {
     const user = req.user;
-    if (!user || !puedeCorregirRecibosEnIM(String(user.rol))) { res.status(403).json({ error: 'Corregir un recibo en InfoManager es sólo de admin o gerente.' }); return; }
+    if (!user || !puedeCorregirRecibosEnIM(String(user.rol))) { res.status(403).json({ error: 'Corregir un recibo en InfoManager es de administración (admin, gerente o administrativo).' }); return; }
     const accion = req.body?.accion;
     if (accion !== 'plan' && accion !== 'corregir') { res.status(400).json({ error: 'accion tiene que ser "plan" o "corregir".' }); return; }
     const cambios = leerCambios(req.body?.cambios);

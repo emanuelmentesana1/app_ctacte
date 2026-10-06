@@ -7,7 +7,8 @@
  * observaciones"). Diseño de Mati:
  *  · si sólo cambia la CUENTA, se edita el recibo en IM5 y conserva el número;
  *  · si cambia el monto, el cliente o la fecha, se anula y se reemite;
- *  · siempre con confirmación, sólo admin o gerente, controlando antes contra IM y dejando registro.
+ *  · siempre con confirmación, controlando antes contra IM y dejando registro. Quién: admin, gerente y administrativo
+ *    (Anto se sumó el mismo 06/10, pedido de Mati).
  *
  * 🔑 El cuerpo del PUT se arma IGUAL que la pantalla de IM5 (copiado de su código, v1.0.436, y comparado campo por campo
  * con un PUT real capturado sin enviar). Probado el 06/10 en el RC 30156402: editar no cambia el número, el usuario, la

@@ -118,11 +118,10 @@ describe('puedeRevisarRecibos — imputar, aprobar y rechazar cobranzas', () => 
 });
 
 describe('puedeCorregirRecibosEnIM — editar o anular en IM un recibo ya emitido (Mati, 06/10/2026)', () => {
-    it('🔑 sólo admin y gerente: toca InfoManager con el usuario de Mati', () => {
-        expect(puedeCorregirRecibosEnIM('admin')).toBe(true);
-        expect(puedeCorregirRecibosEnIM('gerente')).toBe(true);
+    it('🔑 admin, gerente y administrativo (Anto): Mati, 06/10/2026', () => {
+        for (const rol of ['admin', 'gerente', 'administrativo']) expect(puedeCorregirRecibosEnIM(rol), rol).toBe(true);
     });
-    it('🔴 administrativo aprueba recibos pero no los corrige en IM; el resto, menos', () => {
-        for (const rol of ['administrativo', 'vendedor', 'repartidor', 'encargado', 'socio', '']) expect(puedeCorregirRecibosEnIM(rol), rol).toBe(false);
+    it('🔴 nadie más: vendedores, repartidores, sucursales', () => {
+        for (const rol of ['vendedor', 'repartidor', 'encargado', 'socio', '']) expect(puedeCorregirRecibosEnIM(rol), rol).toBe(false);
     });
 });
