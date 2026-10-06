@@ -31,7 +31,22 @@ interface OverrideItem {
 type Categoria = typeof CATEGORIA_ORDER[number];
 
 interface BreakdownEntry { neto: number; comision: number; lineas: number }
-interface DescuentoRebotes { total_rebotado: number; descuento: number; renglones: number }
+interface DescuentoRebotes {
+    total_rebotado: number; descuento: number; renglones: number;
+    /** Rebotes por error de la empresa / depósito: el 3% se SUMA (desde septiembre 2026). */
+    total_empresa?: number; bonificacion?: number; renglones_empresa?: number;
+}
+/** Premio por cumplimiento del objetivo (server-lib/premioObjetivo.ts). */
+interface PremioObjetivo {
+    pct_cumplimiento: number | null;
+    tasa: number;
+    base: number;
+    premio_bruto: number;
+    productos_total: number;
+    productos_cumplidos: number;
+    reducido: boolean;
+    premio: number;
+}
 interface ComisionVendedor {
     cod_vendedor: number;
     nombre: string;
@@ -39,9 +54,12 @@ interface ComisionVendedor {
     activo: boolean;
     neto_total: number;
     comision_total: number;
-    /** Descuento 3% por rebotes M.C. Vendedor (rige desde julio 2026). */
+    /** Ajustes del 3% por rebotes: −M.C. Vendedor, +empresa/depósito. */
     rebotes: DescuentoRebotes | null;
     comision_neta: number;
+    premio?: PremioObjetivo | null;
+    /** comision_neta + premio. */
+    comision_a_cobrar?: number;
     num_lineas: number;
     num_comprobantes: number;
     breakdown: Record<Categoria, BreakdownEntry>;
@@ -56,7 +74,10 @@ interface ComisionesResponse {
         neto_total: number;
         comision_total: number;
         rebotes_descuento?: number;
+        rebotes_bonificacion?: number;
         comision_neta?: number;
+        premio?: number;
+        comision_a_cobrar?: number;
         num_lineas: number;
         num_comprobantes: number;
         breakdown: Record<Categoria, BreakdownEntry>;
@@ -64,6 +85,9 @@ interface ComisionesResponse {
     categoria_labels: Record<Categoria, string>;
     rebotes_rige?: boolean;
     rebotes_error?: boolean;
+    premio_rige?: boolean;
+    premio_estimado?: boolean;
+    premio_error?: boolean;
 }
 
 interface Props {
@@ -78,6 +102,24 @@ const fmtMoney = (n: number) =>
 // Wrapper: si el modo privacidad está activo, devuelve "$ ••••" en vez del
 // monto real. Pensado para mostrar la pantalla al cliente sin revelar plata.
 const fmtMoneyMaybe = (n: number, hidden: boolean) => hidden ? MASKED : fmtMoney(n);
+const fmtPct = (n: number) => `${(n * 100).toLocaleString('es-AR', { maximumFractionDigits: 1 })}%`;
+
+/**
+ * "−$ 30.606 y +$ 13.241": lo que se restó y se sumó a la comisión por rebotes.
+ * El signo va siempre, aun en modo privacidad, para que se lea qué se ajustó.
+ */
+const AjustesRebotes = ({ r, hidden }: { r: DescuentoRebotes | null; hidden: boolean }) => {
+    const menos = r?.descuento ?? 0;
+    const mas = r?.bonificacion ?? 0;
+    if (menos <= 0 && mas <= 0) return null;
+    return (
+        <span className="cv-ajustes">
+            {menos > 0 && <span className="cv-ajuste-menos">−{fmtMoneyMaybe(menos, hidden)}</span>}
+            {menos > 0 && mas > 0 && ' y '}
+            {mas > 0 && <span className="cv-ajuste-mas">+{fmtMoneyMaybe(mas, hidden)}</span>}
+        </span>
+    );
+};
 
 export const ComisionesView = ({ isAdmin, viewPeriod, userCodVendedor }: Props) => {
     const [data, setData] = useState<ComisionesResponse | null>(null);
@@ -169,12 +211,18 @@ export const ComisionesView = ({ isAdmin, viewPeriod, userCodVendedor }: Props) 
                 </div>
             )}
 
+            {data?.premio_error && (
+                <div className="cv-error">
+                    <AlertCircle size={16} /> No pude leer los objetivos: el premio por objetivo no se está mostrando. Reintentá en un rato.
+                </div>
+            )}
+
             {loading && !data && (
                 <div className="cv-loading"><Loader2 size={32} className="cv-spin" /> Calculando comisiones…</div>
             )}
 
             {data && !isAdmin && ownItem && (
-                <SingleVendorPanel item={ownItem} categoriaLabels={data.categoria_labels} hidden={isPrivate} />
+                <SingleVendorPanel item={ownItem} categoriaLabels={data.categoria_labels} hidden={isPrivate} premioEstimado={!!data.premio_estimado} />
             )}
 
             {data && !isAdmin && !ownItem && (
@@ -192,9 +240,11 @@ export const ComisionesView = ({ isAdmin, viewPeriod, userCodVendedor }: Props) 
 
 // ──────────────────────────── Vendedor: vista simple ────────────────────────
 
-interface SingleProps { item: ComisionVendedor; categoriaLabels: Record<Categoria, string>; hidden: boolean }
-const SingleVendorPanel = ({ item, categoriaLabels, hidden }: SingleProps) => {
+interface SingleProps { item: ComisionVendedor; categoriaLabels: Record<Categoria, string>; hidden: boolean; premioEstimado: boolean }
+const SingleVendorPanel = ({ item, categoriaLabels, hidden, premioEstimado }: SingleProps) => {
     const descuento = item.rebotes?.descuento ?? 0;
+    const bonificacion = item.rebotes?.bonificacion ?? 0;
+    const ajusta = descuento > 0 || bonificacion > 0;
     return (
     <>
         <div className="cv-hero">
@@ -203,13 +253,20 @@ const SingleVendorPanel = ({ item, categoriaLabels, hidden }: SingleProps) => {
             <span className="cv-hero-sub">
                 Sobre <strong>{fmtMoneyMaybe(item.neto_total, hidden)}</strong> facturado neto · {item.num_comprobantes} comprobantes · {item.num_lineas} líneas
             </span>
-            {descuento > 0 && item.rebotes && (
+            {ajusta && item.rebotes && (
                 <span className="cv-hero-rebotes">
-                    Bruta {fmtMoneyMaybe(item.comision_total, hidden)} − <strong>{fmtMoneyMaybe(descuento, hidden)}</strong> por
-                    pedidos mal cargados (3% de {fmtMoneyMaybe(item.rebotes.total_rebotado, hidden)} rebotados · {item.rebotes.renglones} renglones — detalle en el tab Rebotes)
+                    <AjustesRebotes r={item.rebotes} hidden={hidden} />
+                    <span className="cv-hero-rebotes-det">
+                        Bruta {fmtMoneyMaybe(item.comision_total, hidden)}
+                        {descuento > 0 && <> · −3% de {fmtMoneyMaybe(item.rebotes.total_rebotado, hidden)} mal cargado por vos ({item.rebotes.renglones} renglones)</>}
+                        {bonificacion > 0 && <> · +3% de {fmtMoneyMaybe(item.rebotes.total_empresa ?? 0, hidden)} rebotado por la empresa / depósito ({item.rebotes.renglones_empresa ?? 0} renglones)</>}
+                        {' '}— detalle en el tab Rebotes
+                    </span>
                 </span>
             )}
         </div>
+
+        {item.premio && <PremioPanel premio={item.premio} aCobrar={item.comision_a_cobrar ?? item.comision_neta} hidden={hidden} estimado={premioEstimado} />}
 
         <div className="cv-breakdown">
             <h3>Detalle por categoría</h3>
@@ -238,19 +295,29 @@ const SingleVendorPanel = ({ item, categoriaLabels, hidden }: SingleProps) => {
                 </tbody>
                 <tfoot>
                     <tr>
-                        <td>Total{descuento > 0 ? ' (bruta)' : ''}</td>
+                        <td>Total{ajusta ? ' (bruta)' : ''}</td>
                         <td className="num">{fmtMoneyMaybe(item.neto_total, hidden)}</td>
                         <td className="num">{item.num_lineas}</td>
                         <td className="num cv-strong">{fmtMoneyMaybe(item.comision_total, hidden)}</td>
                     </tr>
-                    {descuento > 0 && item.rebotes && (
+                    {ajusta && item.rebotes && (
                         <>
-                            <tr className="cv-rebotes-row">
-                                <td>Descuento rebotes (M.C. Vendedor)</td>
-                                <td className="num">{fmtMoneyMaybe(item.rebotes.total_rebotado, hidden)}</td>
-                                <td className="num">{item.rebotes.renglones}</td>
-                                <td className="num cv-rebotes-desc">−{fmtMoneyMaybe(descuento, hidden)}</td>
-                            </tr>
+                            {descuento > 0 && (
+                                <tr className="cv-rebotes-row">
+                                    <td>Descuento rebotes (M.C. Vendedor)</td>
+                                    <td className="num">{fmtMoneyMaybe(item.rebotes.total_rebotado, hidden)}</td>
+                                    <td className="num">{item.rebotes.renglones}</td>
+                                    <td className="num cv-rebotes-desc">−{fmtMoneyMaybe(descuento, hidden)}</td>
+                                </tr>
+                            )}
+                            {bonificacion > 0 && (
+                                <tr className="cv-rebotes-row--suma">
+                                    <td>Rebotes empresa / depósito</td>
+                                    <td className="num">{fmtMoneyMaybe(item.rebotes.total_empresa ?? 0, hidden)}</td>
+                                    <td className="num">{item.rebotes.renglones_empresa ?? 0}</td>
+                                    <td className="num cv-rebotes-suma">+{fmtMoneyMaybe(bonificacion, hidden)}</td>
+                                </tr>
+                            )}
                             <tr>
                                 <td>Comisión neta</td>
                                 <td className="num"></td>
@@ -266,6 +333,45 @@ const SingleVendorPanel = ({ item, categoriaLabels, hidden }: SingleProps) => {
     );
 };
 
+// ──────────────────── Premio por cumplimiento del objetivo ──────────────────
+// Regla (Manolo, 06/10/2026 — ver server-lib/premioObjetivo.ts): 95% a <100% del
+// objetivo en pesos → 7,5% de la comisión neta; 100% o más → 15%; a la mitad si no
+// cumplió al menos 2 objetivos de producto. El cálculo lo hace el servidor.
+
+const tramoTexto = (p: PremioObjetivo): string => {
+    if (p.pct_cumplimiento == null) return 'Sin objetivo cargado este mes';
+    const pct = fmtPct(p.pct_cumplimiento);
+    if (p.tasa >= 0.15) return `${pct} del objetivo · 100% o más: 15% de la comisión neta`;
+    if (p.tasa > 0) return `${pct} del objetivo · entre 95% y 100%: 7,5% de la comisión neta`;
+    return `${pct} del objetivo · desde 95% cobra premio`;
+};
+
+const productosTexto = (p: PremioObjetivo): string => {
+    if (p.productos_total === 0) return 'Sin objetivos de producto este mes';
+    const base = `Objetivos de producto: ${p.productos_cumplidos} de ${p.productos_total} cumplidos`;
+    return p.reducido ? `${base} (hacen falta 2): premio reducido 50%` : base;
+};
+
+interface PremioProps { premio: PremioObjetivo; aCobrar: number; hidden: boolean; estimado: boolean }
+const PremioPanel = ({ premio, aCobrar, hidden, estimado }: PremioProps) => (
+    <div className="cv-premio">
+        <div className="cv-premio-head">
+            <Trophy size={16} /> Premio por objetivo
+            {estimado && <span className="cv-premio-tag">estimado al día de hoy</span>}
+        </div>
+        <strong className="cv-premio-amount">{fmtMoneyMaybe(premio.premio, hidden)}</strong>
+        <span className="cv-premio-line">{tramoTexto(premio)}</span>
+        <span className={`cv-premio-line${premio.reducido ? ' is-warn' : ''}`}>{productosTexto(premio)}</span>
+        {premio.reducido && (
+            <span className="cv-premio-line">Sin la reducción serían {fmtMoneyMaybe(premio.premio_bruto, hidden)}</span>
+        )}
+        <div className="cv-premio-total">
+            <span>Comisión neta + premio</span>
+            <strong>{fmtMoneyMaybe(aCobrar, hidden)}</strong>
+        </div>
+    </div>
+);
+
 // ──────────────────────────── Admin: ranking ────────────────────────────────
 
 interface AdminProps { data: ComisionesResponse; hidden: boolean; onReload: () => void }
@@ -279,9 +385,18 @@ const AdminPanel = ({ data, hidden, onReload }: AdminProps) => {
                 <span className="cv-hero-sub">
                     Sobre <strong>{fmtMoneyMaybe(data.totales.neto_total, hidden)}</strong> facturado neto · {data.totales.num_comprobantes} comprobantes
                     {(data.totales.rebotes_descuento ?? 0) > 0 && (
-                        <> · <span className="cv-rebotes-desc">−{fmtMoneyMaybe(data.totales.rebotes_descuento!, hidden)} por rebotes</span></>
+                        <> · <span className="cv-hero-menos">−{fmtMoneyMaybe(data.totales.rebotes_descuento!, hidden)}</span> por mal cargados</>
+                    )}
+                    {(data.totales.rebotes_bonificacion ?? 0) > 0 && (
+                        <> · <span className="cv-hero-mas">+{fmtMoneyMaybe(data.totales.rebotes_bonificacion!, hidden)}</span> por rebotes de empresa</>
                     )}
                 </span>
+                {data.premio_rige && (data.totales.premio ?? 0) > 0 && (
+                    <span className="cv-hero-sub">
+                        Premios por objetivo{data.premio_estimado ? ' (estimado)' : ''} <strong>+{fmtMoneyMaybe(data.totales.premio!, hidden)}</strong>
+                        {' '}· con premios <strong>{fmtMoneyMaybe(data.totales.comision_a_cobrar ?? 0, hidden)}</strong>
+                    </span>
+                )}
             </div>
 
             {data.items.length === 0 && (
@@ -311,8 +426,11 @@ const AdminPanel = ({ data, hidden, onReload }: AdminProps) => {
                                         <td className="num">{v.num_comprobantes}</td>
                                         <td className="num cv-strong">
                                             {fmtMoneyMaybe(v.comision_neta ?? v.comision_total, hidden)}
-                                            {(v.rebotes?.descuento ?? 0) > 0 && (
-                                                <div className="cv-rebotes-min">−{fmtMoneyMaybe(v.rebotes!.descuento, hidden)} reb.</div>
+                                            {v.rebotes && ((v.rebotes.descuento ?? 0) > 0 || (v.rebotes.bonificacion ?? 0) > 0) && (
+                                                <div className="cv-rebotes-min"><AjustesRebotes r={v.rebotes} hidden={hidden} /></div>
+                                            )}
+                                            {(v.premio?.premio ?? 0) > 0 && (
+                                                <div className="cv-premio-min">+{fmtMoneyMaybe(v.premio!.premio, hidden)} premio</div>
                                             )}
                                         </td>
                                     </tr>
@@ -336,6 +454,20 @@ const AdminPanel = ({ data, hidden, onReload }: AdminProps) => {
                                                             <span className="cv-detail-cat-name">Rebotes M.C. Vendedor</span>
                                                             <span className="cv-detail-cat-neto">Mal cargado {fmtMoneyMaybe(v.rebotes!.total_rebotado, hidden)} · {v.rebotes!.renglones} renglones</span>
                                                             <strong className="cv-detail-cat-com cv-rebotes-desc">−{fmtMoneyMaybe(v.rebotes!.descuento, hidden)}</strong>
+                                                        </div>
+                                                    )}
+                                                    {(v.rebotes?.bonificacion ?? 0) > 0 && (
+                                                        <div className="cv-detail-cat cv-detail-cat--suma">
+                                                            <span className="cv-detail-cat-name">Rebotes empresa / depósito</span>
+                                                            <span className="cv-detail-cat-neto">Rebotado {fmtMoneyMaybe(v.rebotes!.total_empresa ?? 0, hidden)} · {v.rebotes!.renglones_empresa ?? 0} renglones</span>
+                                                            <strong className="cv-detail-cat-com cv-rebotes-suma">+{fmtMoneyMaybe(v.rebotes!.bonificacion ?? 0, hidden)}</strong>
+                                                        </div>
+                                                    )}
+                                                    {v.premio && (
+                                                        <div className="cv-detail-cat cv-detail-cat--premio">
+                                                            <span className="cv-detail-cat-name">Premio por objetivo{data.premio_estimado ? ' (estimado)' : ''}</span>
+                                                            <span className="cv-detail-cat-neto">{tramoTexto(v.premio)} · {productosTexto(v.premio)}</span>
+                                                            <strong className="cv-detail-cat-com">+{fmtMoneyMaybe(v.premio.premio, hidden)}</strong>
                                                         </div>
                                                     )}
                                                 </div>

@@ -245,3 +245,57 @@
 .cv-rebotes-row td { color: #b3372f }
 .cv-detail-cat--rebotes { border-left: 3px solid rgba(220,68,68,.45); padding-left: 8px }
 [data-theme="dark"] .cv-rebotes-desc, [data-theme="dark"] .cv-rebotes-min, [data-theme="dark"] .cv-rebotes-row td { color: #ff9c8a }
+
+/* ─── Ajustes por rebotes: −3% M.C. Vendedor y +3% empresa / depósito (desde sep 2026) ─── */
+.cv-ajustes { display: block; font-size: 15px; font-weight: 700; letter-spacing: .01em }
+.cv-hero .cv-ajuste-menos { color: #ff9c8a }
+.cv-hero .cv-ajuste-mas { color: #9be3b4 }
+.cv-hero-rebotes-det { display: block; margin-top: 2px }
+.cv-hero-menos { color: #ff9c8a; font-weight: 700 }
+.cv-hero-mas { color: #9be3b4; font-weight: 700 }
+.cv-rebotes-min .cv-ajustes { font-size: 10.5px; font-weight: 600 }
+.cv-ajuste-menos { color: #b3372f }
+.cv-ajuste-mas { color: #1e7a45 }
+.cv-rebotes-suma { color: #1e7a45; font-weight: 700 }
+.cv-rebotes-row--suma td { color: #1e7a45 }
+.cv-detail-cat--suma { border-left: 3px solid rgba(30,122,69,.45); padding-left: 8px }
+.cv-detail-cat--premio { border-left: 3px solid rgba(238,192,69,.7); padding-left: 8px }
+[data-theme="dark"] .cv-ajuste-mas, [data-theme="dark"] .cv-rebotes-suma, [data-theme="dark"] .cv-rebotes-row--suma td { color: #9be3b4 }
+[data-theme="dark"] .cv-ajuste-menos { color: #ff9c8a }
+
+/* ─── Premio por cumplimiento del objetivo (desde sep 2026) ─── */
+.cv-premio {
+    background: #fff;
+    border: 1px solid rgba(238, 192, 69, .55);
+    border-radius: 18px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+    display: flex; flex-direction: column; gap: 4px;
+}
+.cv-premio-head {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 14px; font-weight: 700; color: #06652F;
+}
+.cv-premio-tag {
+    font-size: 10.5px; font-weight: 600; color: #8a6d12;
+    background: rgba(238, 192, 69, .18); border-radius: 999px; padding: 2px 8px;
+}
+.cv-premio-amount {
+    font-family: 'Bebas Neue', 'Poppins', sans-serif;
+    font-size: 34px; line-height: 1.05; color: #06652F;
+}
+.cv-premio-line { font-size: 12.5px; color: #4b544d }
+.cv-premio-line.is-warn { color: #b3372f; font-weight: 600 }
+.cv-premio-total {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(20, 24, 20, .08);
+    font-size: 13px; color: #4b544d;
+}
+.cv-premio-total strong { font-size: 16px; color: #06652F }
+.cv-premio-min { font-size: 10.5px; color: #8a6d12; font-weight: 600; margin-top: 1px }
+[data-theme="dark"] .cv-premio { background: #1f2521; border-color: rgba(238, 192, 69, .45) }
+[data-theme="dark"] .cv-premio-head, [data-theme="dark"] .cv-premio-amount, [data-theme="dark"] .cv-premio-total strong { color: #EEC045 }
+[data-theme="dark"] .cv-premio-line, [data-theme="dark"] .cv-premio-total { color: #c8d0c8 }
+[data-theme="dark"] .cv-premio-line.is-warn { color: #ff9c8a }
+[data-theme="dark"] .cv-premio-tag, [data-theme="dark"] .cv-premio-min { color: #EEC045 }
+[data-theme="dark"] .cv-premio-total { border-color: rgba(255, 255, 255, .08) }

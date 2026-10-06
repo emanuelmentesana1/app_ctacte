@@ -17,7 +17,7 @@ const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Jul
 const GRUPO_META: Record<GrupoResponsable, { label: string; corto: string; sub: string }> = {
     vendedor: { label: 'Error del vendedor', corto: 'Vendedor', sub: '3% menos de comisión' },
     cliente: { label: 'Culpa del cliente', corto: 'Cliente', sub: '3% de recargo' },
-    empresa: { label: 'Empresa / depósito', corto: 'Depósito', sub: 'sin cargo' },
+    empresa: { label: 'Empresa / depósito', corto: 'Depósito', sub: '3% más de comisión' },
     otro: { label: 'Sin clasificar', corto: 'Sin clasificar', sub: 'revisar en la planilla' },
 };
 
@@ -81,6 +81,13 @@ const fmtFecha = (iso: string | null) => {
 
 /** 3% de comisión que se le descuenta al vendedor por lo que rebotó por su error. */
 const PCT_CARGO = 0.03;
+
+/**
+ * Desde septiembre 2026 el 3% de lo rebotado por error de la empresa / depósito se le
+ * SUMA a la comisión del vendedor (espejo de rigeBonificacionRebotes en
+ * server-lib/rebotesParser.ts; el cálculo que se paga lo hace el servidor).
+ */
+const rigeBonificacion = (year: number, month: number) => year > 2026 || (year === 2026 && month >= 9);
 
 export const RebotesView = ({ isAdmin, viewPeriod }: Props) => {
     const [data, setData] = useState<RebotesResponse | null>(null);
@@ -232,6 +239,9 @@ export const RebotesView = ({ isAdmin, viewPeriod }: Props) => {
     const descuentoVendedor = (recargos?.rige ?? false)
         ? Math.round((porGrupo.get('vendedor')?.total ?? 0) * PCT_CARGO * 100) / 100
         : 0;
+    const bonificacionEmpresa = rigeBonificacion(viewPeriod.year, viewPeriod.month)
+        ? Math.round((porGrupo.get('empresa')?.total ?? 0) * PCT_CARGO * 100) / 100
+        : 0;
 
     return (
         <div className="rb-wrap">
@@ -301,7 +311,9 @@ export const RebotesView = ({ isAdmin, viewPeriod }: Props) => {
                                     ? `−${fmtMoney(descuentoVendedor)} de comisión`
                                     : g === 'cliente' && (recargos?.resumen.recargo_total ?? 0) > 0
                                         ? `+${fmtMoney(recargos!.resumen.recargo_total)} de recargo`
-                                        : meta.sub;
+                                        : g === 'empresa'
+                                            ? (bonificacionEmpresa > 0 ? `+${fmtMoney(bonificacionEmpresa)} de comisión` : rigeBonificacion(viewPeriod.year, viewPeriod.month) ? meta.sub : 'sin cargo')
+                                            : meta.sub;
                                 return (
                                     <button
                                         key={g}
