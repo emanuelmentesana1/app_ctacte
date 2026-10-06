@@ -177,7 +177,8 @@ export function planDeEmision(e: EntradaPlan): PasoEmision[] {
         // Como la ve Anto en Cobranzas: "FA 3-142847".
         const etiqueta = (f: FacturaParaImputar | undefined, id: string) =>
             [f?.tipo_comprobante, f?.punto_de_venta != null ? `${f.punto_de_venta}-${f.numero}` : String(f?.numero ?? id)].filter(Boolean).join(' ');
-        const deuda = pendientes.filter(f => Number(f.saldo ?? f.importe_factura ?? 0) > 0)
+        // Un residuo de $1 o menos no se ofrece: IM lo imputaría en $0 (hoja 3449, 06/10/2026).
+        const deuda = pendientes.filter(f => Number(f.saldo ?? f.importe_factura ?? 0) > 1)
             .map(f => ({ id: String(f.id), etiqueta: etiqueta(f, String(f.id)), fecha: f.fecha_factura ?? null, saldo: centavos(Number(f.saldo ?? f.importe_factura ?? 0)) }))
             .sort((a, b) => (a.fecha ?? '9999') < (b.fecha ?? '9999') ? -1 : (a.fecha ?? '9999') > (b.fecha ?? '9999') ? 1 : 0);
         const conPendientes = { pendientes: deuda, elegida: !!l.facturas };

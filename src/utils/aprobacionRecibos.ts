@@ -20,6 +20,8 @@ const centavos = (n: number) => Math.round(n * 100) / 100;
  * *"se imputa primero a la deuda más vieja, casi siempre"*).
  *
  * · Sólo deudas: una nota de crédito llega con saldo negativo y no es algo que se cobre.
+ * · 🪤 Un residuo de $1 o menos tampoco (hoja 3449, 06/10/2026): IM imputa pesos enteros, el renglón
+ *   quedaría en $0 y el recibo no se emite. Esos residuos los limpia la oficina a Caja diferencias.
  * · Si el pago supera la deuda, se toma todo y la diferencia queda a la vista: la pantalla ya
  *   bloquea aprobar con diferencia y ofrece marcarlo como anticipo. Acá no se inventa nada.
  * · Sin fecha va al final: no se puede afirmar que sea la más vieja.
@@ -29,7 +31,7 @@ export function preseleccionFIFO(facturas: FacturaParaImputar[], monto: number):
     if (!(resto > 0)) return {};
     const deudas = facturas
         .map(f => ({ f, saldo: centavos(Number(f.saldo ?? f.importe_factura ?? 0)) }))
-        .filter(x => x.saldo > 0)
+        .filter(x => x.saldo > 1)
         .sort((a, b) => {
             const fa = a.f.fecha_factura ?? '9999-12-31';
             const fb = b.f.fecha_factura ?? '9999-12-31';

@@ -31,6 +31,12 @@ describe('preseleccionFIFO', () => {
         expect(preseleccionFIFO(facturas, 300_000)).toEqual({ '1': 300_000 });
     });
 
+    it('🪤 un residuo de $1 o menos no se propone: IM imputa pesos enteros y quedaría en $0 (hoja 3449, 06/10)', () => {
+        // Silman tenía una factura vieja con $0,92: FIFO la tomaba primero y el recibo no se podía emitir.
+        expect(preseleccionFIFO([fa(1, '2026-08-01', 0.92), fa(2, '2026-10-05', 240_212.03)], 240_212)).toEqual({ '2': 240_212 });
+        expect(preseleccionFIFO([fa(1, '2026-08-01', 1), fa(2, '2026-10-05', 500)], 500)).toEqual({ '2': 500 });
+    });
+
     it('mismo día: desempata por número de comprobante', () => {
         const facturas = [fa(9, '2026-09-10', 100_000, 51_000), fa(8, '2026-09-10', 100_000, 50_999)];
         expect(preseleccionFIFO(facturas, 150_000)).toEqual({ '8': 100_000, '9': 50_000 });

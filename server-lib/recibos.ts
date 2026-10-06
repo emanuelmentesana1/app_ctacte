@@ -725,6 +725,8 @@ export async function aprobarRecibo(req: Request & { user?: JwtPayload; [CAJA_DE
         : null;
     const { error: updErr } = await sb().from('comprobantes_pago').update({
       status: 'imputado',
+      // Un recibo emitido no tiene error. La rendición lo marca "Emitiendo…" mientras emite (hoja 3449, 06/10).
+      error_msg: null,
       monto,
       fecha_comprobante: fecha,
       medio_pago: medioPago,

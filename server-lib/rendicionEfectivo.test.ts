@@ -221,6 +221,18 @@ describe('resumenParaIM — lo que Anto copia en IM (la API no crea asientos ni 
  * imputa cada recibo. La vista previa propone de la más vieja a la más nueva y se puede cambiar o
  * repartir; la suma tiene que dar lo cobrado (±$5) y la elección se guarda con la rendición.
  */
+describe('residuos de centavos (hoja 3449, 06/10/2026)', () => {
+    it('🔑 una factura vieja con saldo de $1 o menos no frena la rendición: se trata como saldada', () => {
+        const [p] = planDeEmision({
+            hoja: HOJA, efectivo: [{ cod_cliente: 836, importe: 240_212 }], existentes: [], enIM: [], enApp: [], cuentaCaja: CAJA, tope: 20,
+            pendientesDe: () => [fa('RESIDUO', '2026-08-01', 0.92), fa('FA51183', '2026-10-05', 240_212.03)],
+        });
+        expect(p.estado).toBe('listo');
+        expect(p.comprobantes?.map(c => [c.id, c.importe_a_pagar])).toEqual([['FA51183', 240_212]]);
+        expect(p.pendientes?.map(f => f.id)).toEqual(['FA51183']);   // tampoco se ofrece para elegir
+    });
+});
+
 describe('elegir la factura de cada recibo', () => {
     const plan = (efectivo: Array<{ cod_cliente: number; importe: number; facturas?: Array<{ id: string; importe: number }> }>, pendientes = [fa('FA2', '2026-10-05', 412_300), fa('FA1', '2026-09-20', 120_000)]) => planDeEmision({
         hoja: HOJA, efectivo, existentes: [], enIM: [], enApp: [], pendientesDe: () => pendientes, cuentaCaja: CAJA, tope: 20,

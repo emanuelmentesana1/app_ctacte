@@ -21,7 +21,7 @@ import './RendicionesView.css';
  * frena; lo informativo va a un ⓘ, con una línea corta y el detalle en el `title`.
  */
 
-type Estado = 'pago' | 'parcial' | 'de_mas' | 'sin_cobro' | 'no_salio';
+type Estado = 'pago' | 'entrega' | 'deuda_vieja' | 'parcial' | 'de_mas' | 'sin_cobro' | 'no_salio';
 interface Fila {
     cod_cliente: number; cliente: string; llevo: number; nc: number; nd: number; entregado: number; saldo_anterior: number;
     efectivo: number; recibos_efectivo: { id_recibo: string; numero: string | null; fecha: string; importe: number }[];
@@ -54,7 +54,9 @@ const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', '
 const diaLargo = (iso: string) => `${DIAS[new Date(`${iso}T12:00:00Z`).getUTCDay()]} ${ddmm(iso)}`;
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 const ESTADO: Record<Estado, { texto: string; clase: string }> = {
-    pago: { texto: 'Pagó', clase: 'ok' },
+    pago: { texto: 'Pagó todo', clase: 'ok' },
+    entrega: { texto: 'Pagó la entrega', clase: 'ok' },
+    deuda_vieja: { texto: 'Pagó la deuda vieja', clase: 'ok' },
     parcial: { texto: 'Pagó parte', clase: 'ambar' },
     de_mas: { texto: 'Pagó de más', clase: 'verde' },
     sin_cobro: { texto: 'Sin cobro', clase: 'rojo' },

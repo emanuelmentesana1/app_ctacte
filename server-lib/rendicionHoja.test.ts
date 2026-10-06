@@ -74,16 +74,43 @@ describe('armarRendiciones — por cliente', () => {
         expect(f.estado).toBe('pago');
     });
 
-    it('pagó de más (deuda vieja) y no pagó: se distinguen', () => {
+    it('🔄 06/10: el estado mira lo que el cliente debía (saldo anterior + entrega), no sólo la entrega', () => {
+        // Antes: pagar 300.000 con una entrega de 100.000 decía "Pagó de más", aunque debía 250.000 de antes.
         const r = base({
             hojas: [hoja(3423, '2026-09-21', [pedido(101, 100_000, { saldo_anterior: 250_000 }), pedido(102, 80_000)])],
             recibosIM: [efectivo(1, 101, '2026-09-21', 300_000)],
         });
         const [a, b] = r.hojas[0].filas;
-        expect(a.estado).toBe('de_mas');
-        expect(a.queda).toBe(-200_000);
+        expect(a.estado).toBe('parcial');
+        expect(a.queda).toBe(50_000);
         expect(b.estado).toBe('sin_cobro');
         expect(r.hojas[0].totales.sin_cobro).toBe(1);
+    });
+
+    it('🔑 hoja 3449: pagó justo la deuda vieja, parte en efectivo y parte por transferencia', () => {
+        const r = base({
+            hojas: [hoja(3449, '2026-10-05', [pedido(13, 210_411.74, { saldo_anterior: 599_802.86 })])],
+            recibosIM: [efectivo(1, 13, '2026-10-05', 192_800)],
+            transferencias: [transf('t1', 13, '2026-10-05', 407_000, { created_by_rol: 'vendedor', created_by_nombre: 'Sebastián' })],
+        });
+        const f = r.hojas[0].filas[0];
+        expect(f.cobrado).toBe(599_800);
+        expect(f.estado).toBe('deuda_vieja');
+        expect(f.queda).toBe(210_414.6);
+        expect(r.hojas[0].totales.de_mas).toBe(0);
+    });
+
+    it('pagó la entrega y le queda la deuda vieja; pagó todo; pagó más de lo que debía', () => {
+        const r = base({
+            hojas: [hoja(3423, '2026-09-21', [
+                pedido(101, 100_000, { saldo_anterior: 50_000 }),
+                pedido(102, 100_000, { saldo_anterior: 50_000 }),
+                pedido(103, 100_000, { saldo_anterior: 50_000 }),
+            ])],
+            recibosIM: [efectivo(1, 101, '2026-09-21', 100_000), efectivo(2, 102, '2026-09-21', 150_000), efectivo(3, 103, '2026-09-21', 180_000)],
+        });
+        expect(r.hojas[0].filas.map(f => f.estado)).toEqual(['entrega', 'pago', 'de_mas']);
+        expect(r.hojas[0].filas.map(f => f.queda)).toEqual([50_000, 0, -30_000]);
     });
 
     it('🔑 lo que no salió (botón «No salió» de Repartos) no es entregado ni "sin cobro", igual que en la Liquidación', () => {

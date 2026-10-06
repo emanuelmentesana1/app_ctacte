@@ -62,7 +62,7 @@ export interface TransferenciaIn {
     created_by_nombre?: string | null;
 }
 
-export type EstadoCobro = 'pago' | 'parcial' | 'de_mas' | 'sin_cobro' | 'no_salio';
+export type EstadoCobro = 'pago' | 'entrega' | 'deuda_vieja' | 'parcial' | 'de_mas' | 'sin_cobro' | 'no_salio';
 
 export interface FilaRendicion {
     cod_cliente: number;
@@ -76,7 +76,7 @@ export interface FilaRendicion {
     recibos_efectivo: Array<{ id_recibo: string; numero: string | null; fecha: string; importe: number }>;
     transferencias: Array<{ id: string; monto: number; medio: string | null; status: string; fecha: string; quien: string | null; nombre: string | null }>;
     cobrado: number;
-    /** entregado − cobrado. Negativo = pagó de más (en general, deuda vieja). */
+    /** Lo que sigue debiendo: saldo anterior + entregado − cobrado. Negativo = pagó de más. */
     queda: number;
     estado: EstadoCobro;
     /** El cliente estaba en otra hoja del mismo día: el cobro se cuenta en una sola. */
@@ -163,12 +163,19 @@ const tolerancia = (entregado: number) => Math.max(1, Math.abs(entregado) * 0.01
 /** Los números de hoja que aparecen en un texto ("segun hr 3424", "3421,3422-AS"). */
 const numerosEn = (texto: string) => [...texto.matchAll(/\b(\d{4})\b/g)].map(m => Number(m[1]));
 
-function estadoDe(entregado: number, cobrado: number): EstadoCobro {
+/**
+ * 🔄 06/10/2026 (Mati, hoja 3449): el estado mira lo que el cliente DEBÍA, que es el saldo anterior más lo
+ * entregado ese día (las dos columnas del papel). Antes comparaba sólo contra la entrega, y pagar deuda
+ * vieja (en efectivo o por transferencia) salía "Pagó de más".
+ */
+function estadoDe(entregado: number, cobrado: number, saldoAnterior: number): EstadoCobro {
     if (!(cobrado > 0.005)) return 'sin_cobro';
-    const t = tolerancia(entregado);
-    if (cobrado > entregado + t) return 'de_mas';
-    if (cobrado < entregado - t) return 'parcial';
-    return 'pago';
+    const total = entregado + saldoAnterior;
+    if (cobrado > total + tolerancia(total)) return 'de_mas';
+    if (Math.abs(cobrado - total) <= tolerancia(total)) return 'pago';
+    if (saldoAnterior > 1 && Math.abs(cobrado - entregado) <= tolerancia(entregado)) return 'entrega';
+    if (saldoAnterior > 1 && Math.abs(cobrado - saldoAnterior) <= tolerancia(saldoAnterior)) return 'deuda_vieja';
+    return 'parcial';
 }
 
 export function armarRendiciones(e: EntradaRendicion): { hojas: HojaRendicion[]; asientos: AsientoRendicion[]; fuera_de_hoja: CobroFueraDeHoja[] } {
@@ -290,18 +297,19 @@ export function armarRendiciones(e: EntradaRendicion): { hojas: HojaRendicion[];
             const cobrado = centavos(efectivo + transferencias);
             // El saldo anterior es del CLIENTE, no del comprobante: con dos remitos no se suma dos veces.
             const saldo = ps.find(p => p.saldo_anterior != null)?.saldo_anterior;
+            const saldoAnterior = centavos(Number(saldo ?? 0));
             return {
                 cod_cliente: cod,
                 cliente: ps.find(p => p.cliente_nombre)?.cliente_nombre ?? `Cliente ${cod}`,
                 llevo, nc, nd, entregado,
-                saldo_anterior: centavos(Number(saldo ?? 0)),
+                saldo_anterior: saldoAnterior,
                 efectivo,
                 recibos_efectivo: recibos.map(r => ({ id_recibo: String(r.id_recibo), numero: r.numero ?? null, fecha: String(r.fecha).slice(0, 10), importe: efectivoDe(r) })),
                 transferencias: transf.map(t => ({ id: t.id, monto: Number(t.monto) || 0, medio: t.medio_pago, status: t.status, fecha: (t.fecha_comprobante || t.created_at || '').slice(0, 10), quien: t.created_by_rol ?? null, nombre: t.created_by_nombre ?? null })),
                 cobrado,
-                queda: centavos(entregado - cobrado),
+                queda: centavos(saldoAnterior + entregado - cobrado),
                 // Si nada de lo suyo salió y no pagó, no es un "sin cobro": no hubo entrega.
-                estado: !salieron.length && !(cobrado > 0.005) ? 'no_salio' : estadoDe(entregado, cobrado),
+                estado: !salieron.length && !(cobrado > 0.005) ? 'no_salio' : estadoDe(entregado, cobrado, saldoAnterior),
                 compartido: (hojasDelCliente.get(`${fechaDe(h)}|${cod}`)?.length ?? 0) > 1,
                 no_salieron: ps.length - salieron.length,
             };

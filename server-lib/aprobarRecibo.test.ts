@@ -84,6 +84,13 @@ describe('aprobarRecibo — lo que ya hacía', () => {
     expect(m.updates.at(-1)).toMatchObject({ status: 'imputado', infomanager_recibo_id: '58999001' });
   });
 
+  it('🪤 al emitir bien no queda ningún texto de error (la rendición marca "Emitiendo…" mientras emite)', async () => {
+    m.comp = { ...m.comp, status: 'error', error_msg: 'Emitiendo desde la rendición de la hoja 3449…' };
+    m.crearRecibo.mockResolvedValue({ ok: true, id: '58999001', raw: {} });
+    await aprobarRecibo(req(), res());
+    expect(m.updates.at(-1)).toMatchObject({ status: 'imputado', error_msg: null });
+  });
+
   it('si la factura ya no está pendiente en IM, no emite (otro recibo la pagó)', async () => {
     m.fetchComprobPendientes.mockResolvedValue([]);
     const r = res();

@@ -102,6 +102,18 @@ try {
     } finally { await ctx.close(); }
   });
 
+  await test('Rendiciones: quien pagó la deuda vieja (efectivo + transferencia) no figura «Pagó de más» (hoja 3449, 06/10)', async () => {
+    const vieja = fila(13, 'CLIENTE CABRERA', { llevo: 210_411.74, entregado: 210_411.74, saldo_anterior: 599_802.86, efectivo: 192_800, cobrado: 599_800, queda: 210_414.6, estado: 'deuda_vieja',
+      transferencias: [{ id: 't1', monto: 407_000, medio: 'mercadopago', status: 'imputado', fecha: '2026-09-21', quien: 'vendedor', nombre: 'Sebastián' }] });
+    const { page, ctx } = await abrir(1440, respuesta({ hojas: [hoja(3423, 'VICTOR', [vieja])] }));
+    try {
+      const tarjeta = page.locator('.rd-hoja', { hasText: '3423' });
+      await tarjeta.locator('.rd-hoja-head').click();
+      const f = await tarjeta.locator('.rd-fila', { hasText: 'CLIENTE CABRERA' }).innerText();
+      assert(/Pagó la deuda vieja/.test(f) && !/de más/i.test(f), `La fila no dice "Pagó la deuda vieja": ${f}`);
+    } finally { await ctx.close(); }
+  });
+
   await test('Rendiciones: es sólo lectura — no ofrece emitir, cerrar ni aprobar', async () => {
     const { page, ctx } = await abrir(1440, respuesta());
     try {
