@@ -25,8 +25,10 @@ import {
   normalizarMotivo, codVendedorRebote, parseFechaRebote, parseNumeroRebote,
   buildRebotesFieldIndex, parseRebotesWorkbook, matchClientesRebotes,
   rigenCargosRebotes, calcDescuentosVendedor, detectarEventosRecargo,
+  rigeBonificacionRebotes, MOTIVOS_BONIFICACION_VENDEDOR,
   MOTIVOS_DESCUENTO_VENDEDOR, MOTIVOS_RECARGO_CLIENTE,
 } from './rebotesParser.js';
+import { MOTIVO_META } from '../src/utils/agruparRebotes.js';
 
 // ─── normalizarMotivo: variantes REALES del sheet (cambian por mes) ──────────
 
@@ -174,8 +176,8 @@ describe('calcDescuentosVendedor — 3% de lo rebotado por M.C. VENDEDOR', () =>
       row({ cod_vendedor: null, total: 999999 }),   // sin vendedor: no hay a quién
       row({ total: null }),                          // sin total: no suma
     ]);
-    expect(d.get(3)).toEqual({ total_rebotado: 133333, descuento: 3999.99, renglones: 2 });
-    expect(d.get(4)).toEqual({ total_rebotado: 50000, descuento: 1500, renglones: 1 });
+    expect(d.get(3)).toMatchObject({ total_rebotado: 133333, descuento: 3999.99, renglones: 2 });
+    expect(d.get(4)).toMatchObject({ total_rebotado: 50000, descuento: 1500, renglones: 1 });
     expect(d.size).toBe(2);
   });
 
@@ -185,12 +187,66 @@ describe('calcDescuentosVendedor — 3% de lo rebotado por M.C. VENDEDOR', () =>
       row({ fecha: '2026-07-20', total: 900 }),  // después del corte
       row({ fecha: null, total: 50 }),           // sin fecha: cuenta igual
     ], '2026-07-10');
-    expect(d.get(3)).toEqual({ total_rebotado: 150, descuento: 4.5, renglones: 2 });
+    expect(d.get(3)).toMatchObject({ total_rebotado: 150, descuento: 4.5, renglones: 2 });
   });
 
   it('sin rebotes de vendedor → mapa vacío', () => {
     expect(calcDescuentosVendedor([row({ motivo: 'devolucion' })]).size).toBe(0);
     expect(calcDescuentosVendedor([]).size).toBe(0);
+  });
+});
+
+describe('bonificación 3% por rebotes de la EMPRESA (desde septiembre 2026, Manolo 06/10)', () => {
+  const row = (over: Partial<{ cod_vendedor: number | null; motivo: string; total: number | null; fecha: string | null }>) => ({
+    cod_vendedor: 3, motivo: 'mc_deposito', total: 100000, fecha: '2026-09-05', ...over,
+  });
+
+  it('rige desde septiembre 2026', () => {
+    expect(rigeBonificacionRebotes(2026, 8)).toBe(false);
+    expect(rigeBonificacionRebotes(2026, 9)).toBe(true);
+    expect(rigeBonificacionRebotes(2027, 1)).toBe(true);
+  });
+
+  it('suma los 6 motivos de empresa/depósito por vendedor; el descuento del vendedor sigue igual', () => {
+    const d = calcDescuentosVendedor([
+      row({ motivo: 'mc_deposito', total: 200000 }),
+      row({ motivo: 'falto', total: 100000 }),
+      row({ motivo: 'sin_stock', total: 50000 }),
+      row({ motivo: 'error_adm', total: 30000 }),
+      row({ motivo: 'logistica', total: 40000 }),
+      row({ motivo: 'error_sistema', total: 21367 }),  // empresa = 441.367 → 13.241,01
+      row({ motivo: 'mc_vendedor', total: 1020200 }),  // vendedor → −30.606
+      row({ motivo: 'devolucion', total: 999999 }),     // cliente: ni suma ni resta
+      row({ motivo: 'sin_clasificar', total: 999999 }), // sin clasificar: nada
+      row({ cod_vendedor: null, total: 999999 }),       // sin vendedor: no hay a quién
+    ], null, { bonifica: true });
+    expect(d.get(3)).toEqual({
+      total_rebotado: 1020200, descuento: 30606, renglones: 1,
+      total_empresa: 441367, bonificacion: 13241.01, renglones_empresa: 6,
+    });
+    expect(d.size).toBe(1);
+  });
+
+  it('un vendedor con solo rebotes de empresa tiene bonificación y descuento 0', () => {
+    const d = calcDescuentosVendedor([row({ cod_vendedor: 4, total: 10000 })], null, { bonifica: true });
+    expect(d.get(4)).toMatchObject({ descuento: 0, bonificacion: 300, renglones: 0, renglones_empresa: 1 });
+  });
+
+  it('sin `bonifica` (antes de septiembre) los rebotes de empresa no cuentan', () => {
+    expect(calcDescuentosVendedor([row({})]).size).toBe(0);
+  });
+
+  it('respeta el corte asOfDate igual que el descuento', () => {
+    const d = calcDescuentosVendedor([
+      row({ fecha: '2026-09-05', total: 100 }),
+      row({ fecha: '2026-09-25', total: 900 }),
+    ], '2026-09-10', { bonifica: true });
+    expect(d.get(3)).toMatchObject({ total_empresa: 100, bonificacion: 3 });
+  });
+
+  it('los motivos que suman son EXACTAMENTE el recuadro "Empresa / depósito" del tab Rebotes', () => {
+    const empresaEnPantalla = Object.entries(MOTIVO_META).filter(([, m]) => m.grupo === 'empresa').map(([k]) => k).sort();
+    expect([...MOTIVOS_BONIFICACION_VENDEDOR].sort()).toEqual(empresaEnPantalla);
   });
 });
 
@@ -406,7 +462,7 @@ describe.skipIf(!fs.existsSync(FIXTURE))('parseRebotesWorkbook · sheet real ene
     const julio = meses.find(m => m.month === 7)!;
     const d = calcDescuentosVendedor(julio.rows);
     expect([...d.keys()]).toEqual([3]); // Marcelo
-    expect(d.get(3)).toEqual({ total_rebotado: 901986, descuento: 27059.58, renglones: 12 });
+    expect(d.get(3)).toMatchObject({ total_rebotado: 901986, descuento: 27059.58, renglones: 12 });
   });
 
   it('todo vendedor ESCRITO mapea a un cod; solo quedan null las celdas vacías (2 filas reales de FEBRERO)', () => {

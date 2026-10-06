@@ -42,6 +42,17 @@ export type MotivoRebote =
  * junto a la normalización.
  */
 export const MOTIVOS_DESCUENTO_VENDEDOR: ReadonlySet<MotivoRebote> = new Set(['mc_vendedor']);
+/**
+ * Rebotes por error de la EMPRESA (el recuadro "Empresa / depósito" del tab
+ * Rebotes): el 3% de lo rebotado se le SUMA a la comisión del vendedor del
+ * pedido (decisión de Manolo, 06/10/2026, rige desde septiembre 2026). Tiene
+ * que coincidir con el grupo 'empresa' de src/utils/agruparRebotes.ts: lo
+ * controla un test, para que el número del recuadro y el de comisiones no se
+ * separen.
+ */
+export const MOTIVOS_BONIFICACION_VENDEDOR: ReadonlySet<MotivoRebote> = new Set([
+  'mc_deposito', 'falto', 'sin_stock', 'error_adm', 'logistica', 'error_sistema',
+]);
 export const MOTIVOS_RECARGO_CLIENTE: ReadonlySet<MotivoRebote> = new Set(['devolucion', 'sin_dinero', 'cerrado']);
 
 /**
@@ -356,41 +367,71 @@ export function rigenCargosRebotes(year: number, month: number): boolean {
 
 export const PCT_CARGO_REBOTE = 0.03;
 
+/**
+ * El 3% a favor del vendedor por los rebotes de la empresa rige desde
+ * SEPTIEMBRE 2026 (decisión de Manolo, 06/10/2026). Antes solo existía el
+ * descuento por sus propios errores.
+ */
+export const BONIFICACION_RIGE_DESDE = { year: 2026, month: 9 } as const;
+
+export function rigeBonificacionRebotes(year: number, month: number): boolean {
+  return year > BONIFICACION_RIGE_DESDE.year
+    || (year === BONIFICACION_RIGE_DESDE.year && month >= BONIFICACION_RIGE_DESDE.month);
+}
+
 export interface DescuentoRebotes {
   /** Suma de TOTAL de los renglones rebotados por error del vendedor. */
   total_rebotado: number;
   /** 3% de total_rebotado — se resta de la comisión del mes. */
   descuento: number;
   renglones: number;
+  /** Suma de TOTAL de los renglones rebotados por error de la empresa / depósito. */
+  total_empresa: number;
+  /** 3% de total_empresa — se SUMA a la comisión del mes (desde septiembre 2026). */
+  bonificacion: number;
+  renglones_empresa: number;
 }
 
 /**
- * Agrupa por vendedor el descuento del 3% sobre lo rebotado por su error
- * (motivos en MOTIVOS_DESCUENTO_VENDEDOR). Aplica SIEMPRE, también en
- * devoluciones parciales (decisión de Mati 10/07). asOfDate recorta al día
- * (consistente con el corte de comisiones); los renglones sin fecha cuentan
- * siempre — mejor descontar de más un renglón dudoso que esconderlo.
- * La vigencia (julio 2026+) la chequea el llamador con rigenCargosRebotes.
+ * Agrupa por vendedor los dos ajustes del 3% sobre lo rebotado:
+ *   · descuento: lo rebotado por SU error (MOTIVOS_DESCUENTO_VENDEDOR). Aplica
+ *     SIEMPRE, también en devoluciones parciales (decisión de Mati 10/07).
+ *   · bonificacion: lo rebotado por error de la EMPRESA en sus pedidos
+ *     (MOTIVOS_BONIFICACION_VENDEDOR), solo si `bonifica` (septiembre 2026+).
+ * El vendedor es el de la columna VENDEDOR del sheet, igual para los dos.
+ * asOfDate recorta al día (consistente con el corte de comisiones); los
+ * renglones sin fecha cuentan siempre — mejor descontar de más un renglón
+ * dudoso que esconderlo. La vigencia la chequea el llamador
+ * (rigenCargosRebotes / rigeBonificacionRebotes).
  */
 export function calcDescuentosVendedor(
   rows: Array<{ cod_vendedor: number | null; motivo: string; total: number | null; fecha: string | null }>,
   asOfDate?: string | null,
+  opts: { bonifica?: boolean } = {},
 ): Map<number, DescuentoRebotes> {
   const out = new Map<number, DescuentoRebotes>();
   for (const r of rows) {
     if (r.cod_vendedor == null) continue;
-    if (!MOTIVOS_DESCUENTO_VENDEDOR.has(r.motivo as MotivoRebote)) continue;
+    const motivo = r.motivo as MotivoRebote;
+    const esDescuento = MOTIVOS_DESCUENTO_VENDEDOR.has(motivo);
+    const esBonificacion = !!opts.bonifica && MOTIVOS_BONIFICACION_VENDEDOR.has(motivo);
+    if (!esDescuento && !esBonificacion) continue;
     const total = Number(r.total);
     if (!Number.isFinite(total) || total <= 0) continue;
     if (asOfDate && r.fecha && r.fecha > asOfDate) continue;
     let d = out.get(r.cod_vendedor);
-    if (!d) { d = { total_rebotado: 0, descuento: 0, renglones: 0 }; out.set(r.cod_vendedor, d); }
-    d.total_rebotado += total;
-    d.renglones++;
+    if (!d) {
+      d = { total_rebotado: 0, descuento: 0, renglones: 0, total_empresa: 0, bonificacion: 0, renglones_empresa: 0 };
+      out.set(r.cod_vendedor, d);
+    }
+    if (esDescuento) { d.total_rebotado += total; d.renglones++; }
+    else { d.total_empresa += total; d.renglones_empresa++; }
   }
   for (const d of out.values()) {
     d.total_rebotado = Math.round(d.total_rebotado * 100) / 100;
     d.descuento = Math.round(d.total_rebotado * PCT_CARGO_REBOTE * 100) / 100;
+    d.total_empresa = Math.round(d.total_empresa * 100) / 100;
+    d.bonificacion = Math.round(d.total_empresa * PCT_CARGO_REBOTE * 100) / 100;
   }
   return out;
 }

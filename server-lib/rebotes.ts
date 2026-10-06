@@ -18,7 +18,7 @@ import { fetchClientesIMCached } from './infomanager.js';
 import {
   parseRebotesWorkbook, matchClientesRebotes, calcDescuentosVendedor, rigenCargosRebotes,
   detectarEventosRecargo,
-  MOTIVOS_DESCUENTO_VENDEDOR,
+  MOTIVOS_DESCUENTO_VENDEDOR, MOTIVOS_BONIFICACION_VENDEDOR, rigeBonificacionRebotes,
   type ClienteMaestro, type DescuentoRebotes, type EventoRecargo,
 } from './rebotesParser.js';
 import { invalidateAll as invalidateGoalsCache } from './goalsResponseCache.js';
@@ -134,8 +134,9 @@ export async function syncRebotes(opts: { buffer?: Buffer; importedBy?: string |
 // ─── Descuento 3% para comisiones (fase 2) ───────────────────────────────────
 
 /**
- * Descuentos por rebotes M.C. VENDEDOR del mes, agrupados por cod_vendedor.
- * Lo consume getComisionesData. Devuelve:
+ * Ajustes por rebotes del mes, agrupados por cod_vendedor: el descuento por
+ * M.C. VENDEDOR y (desde septiembre 2026) la bonificación por los rebotes de
+ * la empresa / depósito. Lo consume getComisionesData. Devuelve:
  *   · Map vacío si el período es anterior a la vigencia (julio 2026) o no hay Supabase
  *   · null si la query falló — el llamador debe AVISAR en vez de mostrar en
  *     silencio una comisión sin descontar.
@@ -144,16 +145,20 @@ export async function getDescuentosRebotes(
   year: number, month: number, asOfDate?: string | null,
 ): Promise<Map<number, DescuentoRebotes> | null> {
   if (!rigenCargosRebotes(year, month) || !hasSupabase()) return new Map();
+  const bonifica = rigeBonificacionRebotes(year, month);
+  const motivos = bonifica
+    ? [...MOTIVOS_DESCUENTO_VENDEDOR, ...MOTIVOS_BONIFICACION_VENDEDOR]
+    : [...MOTIVOS_DESCUENTO_VENDEDOR];
   const { data, error } = await sb().from('rebotes')
     .select('cod_vendedor, motivo, total, fecha')
     .eq('tenant_id', TENANT_ID).eq('year', year).eq('month', month)
-    .in('motivo', [...MOTIVOS_DESCUENTO_VENDEDOR])
+    .in('motivo', motivos)
     .not('cod_vendedor', 'is', null);
   if (error) {
     console.error('[rebotes] getDescuentosRebotes:', error.message);
     return null;
   }
-  return calcDescuentosVendedor(data ?? [], asOfDate ?? null);
+  return calcDescuentosVendedor(data ?? [], asOfDate ?? null, { bonifica });
 }
 
 // ─── Recargo 3% al cliente (fase 3) ──────────────────────────────────────────

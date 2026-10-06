@@ -23,7 +23,10 @@ import {
 import { loadVendedorOverrides, resolveCodVendedor } from './comisionOverrides.js';
 import { getDescuentosRebotes } from './rebotes.js';
 import { rigenCargosRebotes, PCT_CARGO_REBOTE, type DescuentoRebotes } from './rebotesParser.js';
-import { getComisionPctOverrides } from './productGoals.js';
+import { getComisionPctOverrides, productosCumplidosPorVendedor } from './productGoals.js';
+import { pctCumplimientoPorVendedor } from './goals.js';
+import { calcPremioObjetivo, rigePremioObjetivo, type PremioObjetivo } from './premioObjetivo.js';
+import { hoyArgentinaPartes } from '../src/utils/hoyArgentina.js';
 
 interface BreakdownEntry { neto: number; comision: number; lineas: number }
 interface ComisionVendedor {
@@ -33,10 +36,15 @@ interface ComisionVendedor {
   activo: boolean;
   neto_total: number;
   comision_total: number;
-  /** Descuento del 3% por rebotes M.C. VENDEDOR (rige desde julio 2026). */
+  /** Ajustes del 3% por rebotes: descuento por M.C. VENDEDOR (desde julio 2026) y
+   *  bonificación por rebotes de la empresa / depósito (desde septiembre 2026). */
   rebotes: DescuentoRebotes | null;
-  /** comision_total − rebotes.descuento — lo que efectivamente se paga. */
+  /** comision_total − rebotes.descuento + rebotes.bonificacion. */
   comision_neta: number;
+  /** Premio por cumplimiento del objetivo del mes (desde septiembre 2026). null = no rige. */
+  premio: PremioObjetivo | null;
+  /** comision_neta + premio.premio — lo que efectivamente se paga. */
+  comision_a_cobrar: number;
   num_lineas: number;
   num_comprobantes: number;
   breakdown: Record<CategoriaComision, BreakdownEntry>;
@@ -237,6 +245,8 @@ export async function getComisionesData(opts: GetComisionesOpts) {
         comision_total: 0,
         rebotes: null,
         comision_neta: 0,
+        premio: null,
+        comision_a_cobrar: 0,
         num_lineas: 0,
         num_comprobantes: 0,
         breakdown: emptyBreakdown(),
@@ -280,7 +290,40 @@ export async function getComisionesData(opts: GetComisionesOpts) {
     else for (const v of acc.values()) v.rebotes = descuentos.get(v.cod_vendedor) ?? null;
   }
   for (const v of acc.values()) {
-    v.comision_neta = Math.round((v.comision_total - (v.rebotes?.descuento ?? 0)) * 100) / 100;
+    v.comision_neta = Math.round(
+      (v.comision_total - (v.rebotes?.descuento ?? 0) + (v.rebotes?.bonificacion ?? 0)) * 100,
+    ) / 100;
+  }
+
+  // 4c. Premio por cumplimiento del objetivo (Manolo, 06/10/2026; ver
+  // premioObjetivo.ts): 7,5% o 15% de la comisión neta según el % del objetivo en
+  // pesos, a la mitad si no cumplió 2 objetivos de producto. Solo Casa Central,
+  // desde septiembre 2026. Mes en curso = estimado (el cumplimiento todavía se
+  // mueve). Si falla la lectura de objetivos, NO se inventa un premio: se avisa.
+  const hoy = hoyArgentinaPartes();
+  const premioRige = codEmpresaTarget === COD_EMPRESA_CASA_CENTRAL && rigePremioObjetivo(year, month);
+  const premioEstimado = premioRige && (year > hoy.year || (year === hoy.year && month >= hoy.month) || asOfValid != null);
+  let premioError = false;
+  if (premioRige && hasSupabase()) {
+    try {
+      const [pcts, productos] = await Promise.all([
+        pctCumplimientoPorVendedor(year, month),
+        productosCumplidosPorVendedor(year, month),
+      ]);
+      for (const v of acc.values()) {
+        v.premio = calcPremioObjetivo(
+          v.comision_neta,
+          pcts.get(v.cod_vendedor) ?? null,
+          productos.get(v.cod_vendedor) ?? { total: 0, cumplidos: 0 },
+        );
+      }
+    } catch (e: any) {
+      console.error('[comisiones] premio por objetivo:', e?.message ?? e);
+      premioError = true;
+    }
+  }
+  for (const v of acc.values()) {
+    v.comision_a_cobrar = Math.round((v.comision_neta + (v.premio?.premio ?? 0)) * 100) / 100;
   }
 
   // 5. Enriquecer con datos de Supabase.
@@ -311,14 +354,17 @@ export async function getComisionesData(opts: GetComisionesOpts) {
   } else {
     items = items.filter(v => COD_VENDEDORES_VISIBLES.has(v.cod_vendedor));
   }
-  items.sort((a, b) => b.comision_neta - a.comision_neta);
+  items.sort((a, b) => b.comision_a_cobrar - a.comision_a_cobrar);
 
   // 7. Totales globales.
   const totales = {
     neto_total: Math.round(items.reduce((s, v) => s + v.neto_total, 0) * 100) / 100,
     comision_total: Math.round(items.reduce((s, v) => s + v.comision_total, 0) * 100) / 100,
     rebotes_descuento: Math.round(items.reduce((s, v) => s + (v.rebotes?.descuento ?? 0), 0) * 100) / 100,
+    rebotes_bonificacion: Math.round(items.reduce((s, v) => s + (v.rebotes?.bonificacion ?? 0), 0) * 100) / 100,
     comision_neta: Math.round(items.reduce((s, v) => s + v.comision_neta, 0) * 100) / 100,
+    premio: Math.round(items.reduce((s, v) => s + (v.premio?.premio ?? 0), 0) * 100) / 100,
+    comision_a_cobrar: Math.round(items.reduce((s, v) => s + v.comision_a_cobrar, 0) * 100) / 100,
     num_lineas: items.reduce((s, v) => s + v.num_lineas, 0),
     num_comprobantes: items.reduce((s, v) => s + v.num_comprobantes, 0),
     breakdown: emptyBreakdown(),
@@ -398,6 +444,10 @@ export async function getComisionesData(opts: GetComisionesOpts) {
     rebotes_rige: rebotesRige,
     rebotes_pct: PCT_CARGO_REBOTE,
     rebotes_error: rebotesError || undefined,
+    // Premio por objetivo: rige desde septiembre 2026 en Casa Central.
+    premio_rige: premioRige,
+    premio_estimado: premioEstimado || undefined,
+    premio_error: premioError || undefined,
     diagnostico: diag,
     cache_info: {
       ventas_cached: ventasRes.cached,

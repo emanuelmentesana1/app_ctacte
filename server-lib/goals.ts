@@ -284,6 +284,16 @@ export async function codsVendedoresActivos(): Promise<Set<string>> {
   return new Set(items.filter(i => i.activo).map(i => String(i.cod_vendedor)));
 }
 
+/**
+ * % de cumplimiento del objetivo en pesos de cada vendedor en un mes (el mismo de la pestaña
+ * Objetivos: neto vendido / objetivo neto). null = sin objetivo cargado. Lo usa el premio por
+ * objetivo de la pestaña Comisiones (server-lib/comisiones.ts → premioObjetivo.ts).
+ */
+export async function pctCumplimientoPorVendedor(year: number, month: number): Promise<Map<number, number | null>> {
+  const { items } = await computeGoalItems(year, month, true);
+  return new Map(items.map(i => [Number(i.cod_vendedor), i.pct_cumplimiento]));
+}
+
 export async function listGoals(req: Request & { user?: JwtPayload }, res: Response) {
   try {
     if (!hasSupabase()) { res.status(500).json({ error: 'Supabase no configurado' }); return; }

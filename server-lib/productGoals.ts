@@ -23,6 +23,7 @@ import {
 import { pctParaArticulo } from './comisionesRules.js';
 import { getCached, setCached, invalidateAll as invalidateGoalsCache } from './goalsResponseCache.js';
 import type { JwtPayload } from './auth.js';
+import { productoCumplido, type AvanceProductos } from './premioObjetivo.js';
 
 // ─── Agregado de unidades vendidas (puro, testeable) ─────────────────────────
 
@@ -254,6 +255,36 @@ export async function getComisionPctOverrides(year: number, month: number): Prom
     return new Map<string, number>();
   }
   return expandirComisionOverrides(data ?? []);
+}
+
+// ─── Para el premio por objetivo (pestaña Comisiones) ────────────────────────
+
+/**
+ * Por vendedor: cuántas familias con objetivo en unidades tiene en el mes y cuántas cumplió
+ * (100% o más). Mismo avance que GET /api/product-goals. Lo usa el premio por objetivo
+ * (premioObjetivo.ts): con menos de 2 cumplidas el premio se reduce a la mitad.
+ * Vendedor sin familias cargadas → no aparece en el mapa.
+ */
+export async function productosCumplidosPorVendedor(year: number, month: number): Promise<Map<number, AvanceProductos>> {
+  const grupos = await fetchGruposDelMes(year, month);
+  const out = new Map<number, AvanceProductos>();
+  if (!grupos.length) return out;
+  const soloKeys = new Set<string>();
+  for (const g of grupos) for (const a of g.articulos) soloKeys.add(`${g.cod_vendedor}:${a.cod_articulo}`);
+  const [cabMeta, itemsRes] = await Promise.all([buildCabMeta(year, month), getMonthlyItemsRaw(year, month)]);
+  const ventas = calcUnidadesPorVendedorArticulo(cabMeta, itemsRes.items, soloKeys);
+  const avance = calcAvancePorGrupo(
+    grupos.map(g => ({ id: g.id, cod_vendedor: g.cod_vendedor, articulos: g.articulos.map(a => a.cod_articulo) })),
+    ventas,
+  );
+  for (const g of grupos) {
+    const cod = Number(g.cod_vendedor);
+    const acc = out.get(cod) ?? { total: 0, cumplidos: 0 };
+    acc.total++;
+    if (productoCumplido(avance.get(g.id)?.unidades ?? 0, g.target_unidades)) acc.cumplidos++;
+    out.set(cod, acc);
+  }
+  return out;
 }
 
 // ─── Endpoints ───────────────────────────────────────────────────────────────
