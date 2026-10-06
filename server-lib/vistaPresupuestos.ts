@@ -1,5 +1,6 @@
 import { LecturasCompartidas } from './lecturasCompartidas.js';
 import { huellaPresupuesto } from './versionPresupuesto.js';
+import { firmaDelDia } from './renglonesPorDia.js';
 /**
  * Los presupuestos que la oficina tiene que revisar, y el estado de esa revisión.
  *
@@ -15,7 +16,7 @@ import { huellaPresupuesto } from './versionPresupuesto.js';
 import { sb, TENANT_ID } from './supabase.js';
 import {
   fetchVentas, fetchVentasItems, fetchArticulosCatalogo, fetchClientesIMCon,
-  fetchStockPorDeposito, invalidarCacheVentas, invalidarCacheItems,
+  fetchStockPorDeposito, invalidarCacheVentas, invalidarCacheItems, renglonesDelDia,
 } from './infomanager.js';
 import { pesoDeRenglones, sinPesoAProposito } from './pesoComprobante.js';
 import { zonaDeCliente } from './zonaCliente.js';
@@ -183,7 +184,9 @@ async function armarVistaRango(desde: string, hasta: string, forzar = false, ven
           const items = await adelantado;
           if (items) return items;
         }
-        return fetchVentasItems(f, f, { actualizar: forzar }).catch((e: any) => {
+        // ⏱️ Si el listado de ese día no cambió desde la última lectura, sus renglones se reusan
+        // (06/10/2026, ver renglonesPorDia.ts): es lo que hace liviano el botón Actualizar.
+        return renglonesDelDia(f, firmaDelDia(ventas, f), forzar).catch((e: any) => {
           // Sin los renglones de un día, esos pedidos salen con 0 kg. Es mejor que no abrir.
           console.warn(`[hojasRuta] sin items del ${f}:`, e?.message);
           diasSinItems.push(f); return [] as any[];

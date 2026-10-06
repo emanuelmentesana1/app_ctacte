@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { sb, TENANT_ID } from './supabase.js';
+import { olvidarRenglonesFirmados } from './renglonesPorDia.js';
 
 export class ErrorVersion extends Error {
   constructor(message: string, public status = 409) { super(message); }
@@ -16,7 +17,12 @@ export function huellaPresupuesto(id: string, cab: any, items: any[]): string {
     observaciones: texto(cab.observaciones), filas })).digest('hex');
 }
 export function exigirHuella(esperada: unknown, actual: string) {
-  if (typeof esperada !== 'string' || esperada !== actual) throw new ErrorVersion('El presupuesto cambió o falta su versión. Actualizá y revisalo antes de continuar.');
+  if (typeof esperada !== 'string' || esperada !== actual) {
+    // Puede ser una edición en IM que el listado no mostró (renglonesPorDia.ts): el próximo
+    // Actualizar relee los renglones de cero.
+    olvidarRenglonesFirmados();
+    throw new ErrorVersion('El presupuesto cambió o falta su versión. Actualizá y revisalo antes de continuar.');
+  }
 }
 export function exigirTipoEmpresa(cab: any, tipo: 'PR' | 'FA') {
   if (String(cab.tipo_comprobante ?? '').trim().toUpperCase() !== tipo ||

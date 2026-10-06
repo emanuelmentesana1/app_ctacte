@@ -1,6 +1,7 @@
 import { invalidarImportesFacturas } from './cacheImportesFacturas.js';
 import { parsearPendientesCliente } from './respuestaPendientesCliente.js';
 import { LecturasCompartidas, lecturaLimitada, pausarLecturas } from './lecturasCompartidas.js';
+import { renglonesFirmados } from './renglonesPorDia.js';
 import { fueNuestraCola } from './fallosDeLectura.js';
 import axios, { AxiosInstance } from 'axios';
 import { idIM, ivaExplicita } from './identidadIM.js';
@@ -308,6 +309,14 @@ export async function fetchVentasItems(
 ): Promise<VentaItem[]> {
   return lecturasItems.obtener(`${desde}|${hasta}|${opts?.codEmpresa ?? 'all'}`, () => fetchVentasItemsSinCache(desde, hasta, opts),
     { actualizar: opts?.actualizar, verificar: opts?.sinCache, cachear: diasEntre(desde, hasta) <= MAX_DIAS_CACHE_VENTAS });
+}
+
+/**
+ * Los renglones de UN día, reusando los ya leídos mientras el listado de ese día no cambie (ver
+ * renglonesPorDia.ts). `firma` sale de `firmaDelDia` sobre un listado de `/ventas` recién leído.
+ */
+export function renglonesDelDia(dia: string, firma: string, actualizar = false): Promise<VentaItem[]> {
+  return renglonesFirmados.obtener(dia, firma, () => fetchVentasItems(dia, dia, { actualizar }));
 }
 
 async function fetchVentasItemsSinCache(desde: string, hasta: string, opts?: { codEmpresa?: number; limit?: number }): Promise<VentaItem[]> {

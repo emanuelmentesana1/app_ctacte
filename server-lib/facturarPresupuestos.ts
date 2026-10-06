@@ -1840,6 +1840,9 @@ export async function tableroFacturacion(req: Request & { user?: JwtPayload }, r
     const pendientes = filas.filter(f => !f.facturado_at);
     res.json({
       ok: true, desde, hasta,
+      // Desde cuándo contar los presupuestos nuevos del aviso (novedadesFacturacion.ts). Es el
+      // comienzo de ESTA lectura y en hora del servidor: el reloj de la PC de la oficina no cuenta.
+      leido_at: new Date(t0).toISOString(),
       pendientes,
       facturados: filas.filter(f => f.facturado_at),
       totales: {

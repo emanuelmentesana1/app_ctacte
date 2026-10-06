@@ -39,6 +39,7 @@ import {
 import { invalidarVista } from './vistaPresupuestos.js';
 import { huellaPresupuesto, exigirHuella, exigirTipoEmpresa, bloquearPresupuesto, desbloquearPresupuesto, invalidarAprobacion, rechazoEdicionConfirmado, ErrorVersion } from './versionPresupuesto.js';
 import { invalidarRemitos } from './vistaRemitos.js';
+import { olvidarRenglonesFirmados } from './renglonesPorDia.js';
 import { verificarPreciosEditados } from './verificarPrecioEditado.js';
 import { usuariosPorCod } from './usuariosPorCod.js';
 import { vencimientoDeFactura } from './vencimientoFactura.js';
@@ -369,7 +370,7 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
           avisoCab = avisoCab ? `${avisoCab} · ${aviso}` : aviso;
         }
       }
-      invalidarIM(); invalidarVista(); invalidarRemitos();
+      invalidarIM(); invalidarVista(); invalidarRemitos(); olvidarRenglonesFirmados();
       res.json({
         ok: true, modo: 'cantidades', im_comprobante_id: id, im_numero: cab.numero,
         fecha: fechaNueva ?? cab.fecha ?? null, aviso: avisoCab,
@@ -516,7 +517,7 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
 
     // El nuevo presupuesto requiere revisar y aprobar su propia huella.
     resultadoConocido = !avisoAnular;
-    invalidarIM(); invalidarVista(); invalidarRemitos();
+    invalidarIM(); invalidarVista(); invalidarRemitos(); olvidarRenglonesFirmados();
     res.json({
       ok: true, modo: 'recreado',
       im_comprobante_id: String(creado.id), im_numero: creado.numero,
@@ -528,7 +529,7 @@ export async function editarPresupuesto(req: Request & { user?: JwtPayload }, re
     res.status(err instanceof ErrorVersion || err instanceof ErrorFiscal || err instanceof ErrorPendientes ? err.status : 500).json({ error: err?.message ?? 'error' });
   } finally {
     if (token && resultadoConocido) await desbloquearPresupuesto(id, token);
-    invalidarIM(); invalidarVista(); invalidarRemitos();
+    invalidarIM(); invalidarVista(); invalidarRemitos(); olvidarRenglonesFirmados();
   }
 }
 

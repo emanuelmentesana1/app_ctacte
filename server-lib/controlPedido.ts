@@ -1,6 +1,7 @@
 import { sb, TENANT_ID } from './supabase.js';
 import { bloquearPresupuesto, desbloquearPresupuesto, invalidarAprobacion, ErrorVersion } from './versionPresupuesto.js';
 import { invalidarIM } from './infomanager.js';
+import { olvidarRenglonesFirmados } from './renglonesPorDia.js';
 
 /** Pedido estable primero, PR actual después. Todos los escritores del vendedor comparten orden. */
 export class ControlPedido {
@@ -39,7 +40,7 @@ export class ControlPedido {
   }
   async cerrar() {
     if (this.intentoIM) {
-      invalidarIM();
+      invalidarIM(); olvidarRenglonesFirmados();
       const [{ invalidarVista }, { invalidarRemitos }] = await Promise.all([import('./vistaPresupuestos.js'), import('./vistaRemitos.js')]);
       invalidarVista(); invalidarRemitos();
     }

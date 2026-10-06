@@ -63,6 +63,7 @@ import { guardarKilajeDeBolsa } from './server-lib/kilajeDeBolsa.js';
 import { crearPedido, listPedidos, getPedidoById, anularPedido, creditoCliente, precioArticulo, catalogoPedido, validarListasPedido, editarPedido } from './server-lib/pedidos.js';
 import { pendientesDelDia, arrastreDelDia, impresionHoja, sugerenciaDelDia, listarHojas, listarCamiones, crearHoja, editarHoja, borrarHoja, asignarPedidos, quitarPedido, marcarEstadoEntrega, remitosAnulados } from './server-lib/hojasRuta.js';
 import { tableroFacturacion, previsualizarFacturacion, facturarSeleccion, liberarReclamo, habilitarRemitoPendiente, registrarRemitoExistente, registrarFacturaExistente } from './server-lib/facturarPresupuestos.js';
+import { novedadesFacturacion } from './server-lib/novedadesFacturacion.js';
 import { descartarRemitoSobrante, habilitarFacturaPendiente, anularFacturaEmitida } from './server-lib/conciliarEmision.js';
 // Corregir una factura ya emitida, con notas de crédito y de débito.
 import { verFacturaParaCorregir, corregirFactura, historialCorrecciones, notaFinanciera, moverFechaFactura, cancelarCorreccion } from './server-lib/correccionFactura.js';
@@ -735,6 +736,8 @@ app.delete('/api/retiros/:comprobanteId', requireJwt, (req: any, res) => quitarR
 // ── Etapa 2: facturación de lo aprobado ──────────────────────────────────────
 // 🪤 `/previa` va antes que cualquier ruta con parámetro del mismo prefijo.
 app.get('/api/facturacion/previa', requireJwt, (req: any, res) => previsualizarFacturacion(req, res));
+// Cuántos presupuestos de la app de vendedores llegaron después de la última lectura (sin IM).
+app.get('/api/facturacion/novedades', requireJwt, (req: any, res) => novedadesFacturacion(req, res));
 app.get('/api/facturacion', requireJwt, (req: any, res) => tableroFacturacion(req, res));
 app.post('/api/facturacion', requireJwt, (req: any, res) => facturarSeleccion(req, res));
 // Libera un intento que quedó a medias, DESPUÉS de que una persona verificó en IM.

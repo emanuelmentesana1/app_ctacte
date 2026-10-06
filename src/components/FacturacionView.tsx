@@ -9,7 +9,6 @@ import { authHeaders, getToken, getUser } from '../utils/auth';
 import { FronteraSesion } from '../utils/fronteraSesion';
 import { coincide } from '../utils/buscar';
 import { imprimirComprobante, compartirComprobante } from '../utils/imprimirComprobante';
-import { useRecargarAlVolver } from '../utils/recargarAlVolver';
 import { FacturarModal } from './FacturarModal';
 import { CorregirFacturaModal } from './CorregirFacturaModal';
 import { MoverFechaModal } from './MoverFechaModal';
@@ -125,6 +124,13 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
     const [facturando, setFacturando] = useState<{ ids: string[]; huellas: Record<string, string>; desde: string; hasta: string } | null>(null);
 
     const rangoSeleccion = useRef(`${desde}|${hasta}`);
+    /**
+     * ⏱️ 06/10/2026 — EL AVISO "HAY N PRESUPUESTOS NUEVOS" (punto 5, sí de Mati). Cuándo empezó la
+     * última lectura, en hora del servidor, y los presupuestos de la app de vendedores llegados
+     * después que la pantalla todavía no tiene. Ver `buscarNovedades`.
+     */
+    const leidoAt = useRef<string | null>(null);
+    const [nuevos, setNuevos] = useState<string[]>([]);
     const { iniciar: iniciarLectura } = useLecturaVigente(`${desde}|${hasta}`);
     /**
      * 🔑 Comparaciones pedidas a mano, para los pares que el tablero no alcanzó a verificar.
@@ -244,7 +250,7 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
         const mismoRango = rangoSeleccion.current === `${desde}|${hasta}`;
         if (rangoSeleccion.current !== `${desde}|${hasta}`) { setSel(new Set()); rangoSeleccion.current = `${desde}|${hasta}`; }
         if (!conservarDuranteLectura || !mismoRango) { setPendientes([]); setFacturados([]); setTotales(null); }
-        avisarRecarga();
+        if (!mismoRango) { leidoAt.current = null; setNuevos([]); }
         setCargando(true); setError(null);
         try {
             const r = await fetch(
@@ -257,6 +263,8 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
             setFacturados(d.facturados ?? []);
             setTotales(d.totales ?? null);
             setObservados(d.observados ?? 0);
+            leidoAt.current = d.leido_at ?? null;
+            setNuevos([]);
             setSel(s => new Set([...s].filter(id => (d.pendientes ?? []).some((p: Fila) => p.im_comprobante_id === id))));
             lectura.confirmar();
         } catch (e: any) {
@@ -271,19 +279,47 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
     useEffect(() => { void cargar(); }, [cargar]);
 
 
-    // 🔴 La más sensible de las tres: emitir sobre datos viejos factura lo que ya no es.
-
     /**
-     * 🔄 22/09/2026 — EL REFRESCO AL VOLVER ES SILENCIOSO. Mati: *"se reinicia muy seguido esta
-     * pantalla, no sé por qué"*, con la captura del cartel "Trayendo lo que hay para facturar…".
+     * ⏱️ 06/10/2026 — YA NO SE RECARGA SOLA AL VOLVER A LA PESTAÑA (punto 7, sí de Mati).
      *
-     * Era esto: al volver el foco a la ventana —trabajando con la app y InfoManager lado a lado,
-     * cada clic en la app la trae— se recargaba, y la recarga VACIABA la lista y tapaba todo con
-     * el cartel. Lo que hay que actualizar son los datos, no la pantalla: con `conservar` la
-     * lista se queda donde está y se reemplaza recién cuando llegan los nuevos. El único aviso
-     * es el ícono de Actualizar girando.
+     * Antes, cada vez que el foco volvía a la ventana —trabajando con la app e InfoManager lado a
+     * lado, cada clic— se releía todo contra IM: 8 a 13 s con el rango de una semana. Ahora al
+     * volver, y cada minuto, se pregunta sólo si llegaron presupuestos nuevos (Supabase, sin IM) y
+     * se avisa. Releer lo decide la persona con Actualizar, que además ya es liviano: sólo relee
+     * los días cuyo listado cambió (renglonesPorDia.ts).
+     *
+     * 🪤 Lo editado a mano en InfoManager no dispara el aviso: para eso sigue estando Actualizar.
+     * Facturar no corre riesgo: emite con la versión que se ve y el servidor la coteja contra IM.
      */
-    const avisarRecarga = useRecargarAlVolver(() => { void cargar(true, true); });
+    const ultimaConsulta = useRef(0);
+    const buscarNovedades = useCallback(async () => {
+        const leido = leidoAt.current;
+        if (!leido || document.visibilityState !== 'visible') return;
+        // Con dos ventanas lado a lado `focus` llega con cada clic: una consulta cada 15 s alcanza.
+        if (Date.now() - ultimaConsulta.current < 15_000) return;
+        ultimaConsulta.current = Date.now();
+        const rango = `${desde}|${hasta}`;
+        try {
+            const r = await fetch(`/api/facturacion/novedades?desde=${desde}&hasta=${hasta}&leido_at=${encodeURIComponent(leido)}`,
+                { headers: authHeaders() });
+            const d = await r.json().catch(() => null);
+            // Hubo otra lectura o cambió el rango mientras tanto: la respuesta habla de otra pantalla.
+            if (!r.ok || !d?.ok || leidoAt.current !== leido || rangoSeleccion.current !== rango) return;
+            const enPantalla = new Set(filasVigentes.current.map(p => p.im_comprobante_id));
+            setNuevos((d.ids ?? []).map(String).filter((id: string) => !enPantalla.has(id)));
+        } catch { /* El aviso es una ayuda: sin conexión no se muestra, y Actualizar sigue andando. */ }
+    }, [desde, hasta]);
+    useEffect(() => {
+        const consultar = () => { void buscarNovedades(); };
+        const cadaMinuto = setInterval(consultar, 60_000);
+        document.addEventListener('visibilitychange', consultar);
+        window.addEventListener('focus', consultar);
+        return () => {
+            clearInterval(cadaMinuto);
+            document.removeEventListener('visibilitychange', consultar);
+            window.removeEventListener('focus', consultar);
+        };
+    }, [buscarNovedades]);
 
     /**
      * 🔴 EL REMITO QUE QUEDÓ COLGADO. La factura salió y el remito no se pudo registrar, así que
@@ -325,7 +361,7 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
             });
             const d = await r.json().catch(() => null);
             if (!r.ok || !d?.ok) throw new Error(d?.error ?? `No se pudo (HTTP ${r.status})`);
-            await cargar(true);
+            await cargar(true, true);
         } catch (e: any) { setError(e?.message ?? 'Error de conexión'); }
         finally { setDestrabando(null); }
     };
@@ -344,7 +380,7 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
             const d = await r.json().catch(() => null);
             if (!r.ok || !d?.ok) setError(d?.error ?? `No se pudo retomar (HTTP ${r.status})`);
         } catch (e: any) { setError(e?.message ?? 'Error de conexión'); }
-        finally { setDestrabando(null); void cargar(true); }
+        finally { setDestrabando(null); void cargar(true, true); }
     };
 
     const registrarRemitoHecho = (p: Fila) => {
@@ -464,6 +500,15 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                 </div>
             </div>
 
+            {nuevos.length > 0 && (
+                <div className="fc-aviso fc-novedades" role="status">
+                    <Info size={15} />
+                    <span>Hay <b>{nuevos.length}</b> {nuevos.length === 1 ? 'presupuesto nuevo' : 'presupuestos nuevos'} de los vendedores.</span>
+                    <button className="fc-btn ghost" onClick={() => void cargar(true, true)} disabled={cargando}>
+                        <RefreshCw size={14} className={cargando ? 'spin' : ''} /> Actualizar
+                    </button>
+                </div>
+            )}
             {seleccion.ocultos > 0 && <div role="status">{seleccion.ocultos} seleccionados quedan fuera de la búsqueda.</div>}
             {/* 🔴 Cambios hechos en InfoManager, no acá: si no se dicen, la pantalla miente. */}
             {(() => {
@@ -818,7 +863,10 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                     hasta={facturando.hasta}
                     onClose={huboCambios => {
                         setFacturando(null);
-                        if (huboCambios) void cargar(true);
+                        // ⏱️ Sin vaciar la lista (punto 7). Forzada igual: es liviana —los días sin
+                        // cambios no se vuelven a pedir a IM— y una normal se saltearía si hubo
+                        // otra lectura hace menos de 30 s (`LecturaVigente`).
+                        if (huboCambios) void cargar(true, true);
                     }}
                 />
             )}
@@ -826,9 +874,10 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
             {corrigiendo && (
                 <CorregirFacturaModal
                     idFactura={corrigiendo}
-                    onCerrar={() => { setCorrigiendo(null); void cargar(true, true); }}
+                    // ⏱️ Cerrar sin emitir no relee nada; si algo se emitió, ya llamó a onListo.
+                    onCerrar={() => setCorrigiendo(null)}
                     // Emitir una nota cambia el total del cliente: la pantalla tiene que releerlo.
-                    onListo={() => void cargar(true)}
+                    onListo={() => void cargar(true, true)}
                 />
             )}
 
@@ -837,7 +886,7 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                     idFactura={moviendoFecha}
                     onCerrar={() => setMoviendoFecha(null)}
                     // La fecha cambió: las vistas van por rango y hay que releerlas.
-                    onListo={() => { setMoviendoFecha(null); void cargar(true); }}
+                    onListo={() => { setMoviendoFecha(null); void cargar(true, true); }}
                 />
             )}
         </div>

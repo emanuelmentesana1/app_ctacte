@@ -31,6 +31,7 @@ import { armarFraccionado, totalesFraccionado, armarProduccion } from './fraccio
 import { huellaPresupuesto, exigirHuella, exigirTipoEmpresa, bloquearPresupuesto, desbloquearPresupuesto, invalidarAprobacion, rechazoEdicionConfirmado, ErrorVersion } from './versionPresupuesto.js';
 import { formatosDeBolsa } from './formatosBolsa.js';
 import { esPendienteDeIM, leerPendientes, unirPendientes, pendientesParaMostrar } from './pendientesEntrega.js';
+import { olvidarRenglonesFirmados } from './renglonesPorDia.js';
 
 /** Sólo la oficina (admin, gerente y administrativo). Devuelve true si ya contestó el 403. */
 function frenaSiNoPuede(req: Request & { user?: JwtPayload }, res: Response): boolean {
@@ -371,7 +372,7 @@ export async function corregirCantidades(req: Request & { user?: JwtPayload }, r
     res.status(err instanceof ErrorVersion ? err.status : 502).json({ error: err?.message ?? 'error' });
   } finally {
     if (token && resultadoConocido) await desbloquearPresupuesto(id, token);
-    invalidarIM(); invalidarVista();
+    invalidarIM(); invalidarVista(); olvidarRenglonesFirmados();
   }
 }
 

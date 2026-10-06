@@ -20,6 +20,7 @@ const m = vi.hoisted(() => ({
   fetchClientesIMCon: vi.fn(),
   fetchArticulosCatalogo: vi.fn(),
   fetchStockPorDeposito: vi.fn(),
+  olvidarFirmados: () => {},
 }));
 
 /** ALPISTE a granel: 30 kg por bolsa. Con 20 kg o más corresponde L1 (12); con menos, L2 (13). */
@@ -28,17 +29,25 @@ const CATALOGO = new Map([[1, {
   es_bulto: true, kg_por_bulto: 30, unidad_de_medida: 'BOLSA', equivalencia_um: 30,
 }]]);
 
-vi.mock('./infomanager.js', () => ({
+vi.mock('./infomanager.js', async () => {
+  // Los renglones por día van por el guardado REAL (renglonesPorDia.ts), leyendo de este mock.
+  const { RenglonesFirmados } = await vi.importActual<typeof import('./renglonesPorDia.js')>('./renglonesPorDia.js');
+  const firmados = new RenglonesFirmados<any>();
+  m.olvidarFirmados = () => firmados.olvidar();
+  return {
   // El cache de /ventas se limpia junto con las vistas (10/09/2026).
   invalidarCacheVentas: vi.fn(),
   invalidarCacheItems: vi.fn(),
   fetchVentas: m.fetchVentas,
   fetchVentasItems: m.fetchVentasItems,
+  renglonesDelDia: (dia: string, firma: string, actualizar?: boolean) =>
+    firmados.obtener(dia, firma, () => m.fetchVentasItems(dia, dia, { actualizar })),
   fetchArticulosCatalogo: m.fetchArticulosCatalogo,
   // Se pide con los códigos del rango: un cliente recién creado no está en el cache.
   fetchClientesIMCon: m.fetchClientesIMCon,
   fetchStockPorDeposito: m.fetchStockPorDeposito,
-}));
+  };
+});
 vi.mock('./pedidos.js', () => ({
   reglasActivas: m.reglasActivas,
   descuentosActivos: m.descuentosActivos,
@@ -82,6 +91,7 @@ const renglon = (cod_lista_precios: number, descuento_porc = 0) => ([{
 beforeEach(() => {
   vi.clearAllMocks();
   invalidarVista();
+  m.olvidarFirmados();
   tablasSb = {};
   fakeSb();
   m.fetchVentas.mockResolvedValue([PR]);
@@ -483,6 +493,39 @@ describe('los renglones se piden sin esperar a las ventas', () => {
     expect(m.fetchVentasItems.mock.calls.length).toBeGreaterThanOrEqual(2);
     // Y el pedido sale con sus renglones, no con 0 kg.
     expect(v.pendientes[0]?.kg).toBeGreaterThan(0);
+  });
+});
+
+describe('⏱️ Actualizar liviano: los renglones de un día se releen sólo si su listado cambió (06/10/2026)', () => {
+  // Una semana: los días no se adelantan y cada uno pasa por la firma de su listado.
+  const SEMANA = ['2026-09-03', '2026-09-09'] as const;
+  const leidos = (dia: string) => m.fetchVentasItems.mock.calls.filter(c => c[0] === dia).length;
+
+  it('🔑 dos Actualizar seguidos sin cambios en el día: los renglones se piden una sola vez', async () => {
+    m.fetchVentasItems.mockResolvedValue(renglon(12));
+    const a = await vistaDeRango(...SEMANA, true);
+    const b = await vistaDeRango(...SEMANA, true);
+    expect(leidos('2026-09-09')).toBe(1);
+    // Y la pantalla es la misma: misma versión del presupuesto, mismos kilos.
+    expect(b.pendientes[0].huella).toBe(a.pendientes[0].huella);
+    expect(b.pendientes[0].kg).toBe(30);
+  });
+
+  it('🔴 si el presupuesto se editó en IM (cambia su total), el día se relee y la versión cambia', async () => {
+    m.fetchVentasItems.mockResolvedValueOnce(renglon(12)).mockResolvedValue(renglon(13));
+    const a = await vistaDeRango(...SEMANA, true);
+    m.fetchVentas.mockResolvedValue([{ ...PR, total: 12000 }]);
+    const b = await vistaDeRango(...SEMANA, true);
+    expect(leidos('2026-09-09')).toBe(2);
+    expect(b.pendientes[0].huella).not.toBe(a.pendientes[0].huella);
+  });
+
+  it('🔴 un comprobante nuevo en el día (una factura emitida, un pedido) también lo relee', async () => {
+    m.fetchVentasItems.mockResolvedValue(renglon(12));
+    await vistaDeRango(...SEMANA, true);
+    m.fetchVentas.mockResolvedValue([PR, { ...PR, id: '1000', numero: 58301, tipo_comprobante: 'FA' }]);
+    await vistaDeRango(...SEMANA, true);
+    expect(leidos('2026-09-09')).toBe(2);
   });
 });
 
