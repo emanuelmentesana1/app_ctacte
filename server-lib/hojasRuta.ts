@@ -18,7 +18,7 @@ import type { JwtPayload } from './auth.js';
 import { puedeArmarHojasDeRuta, puedeMarcarEntrega } from './permisos.js';
 import {
   fetchVentas, fetchVentasItems, fetchArticulosCatalogo, fetchClientesIMCached,
-  fechaArgentina, comprobantesPendientesCliente, comprobantesVigentes,
+  fechaArgentina, comprobantesPendientesCliente, comprobantesVigentes, cabeceraComprobante,
 } from './infomanager.js';
 import { pesoDeRenglones, cargaDelCamion, sinPesoAProposito } from './pesoComprobante.js';
 import { vistaDeRango, invalidarVista } from './vistaPresupuestos.js';
@@ -27,7 +27,7 @@ import { armarFraccionado, totalesFraccionado } from './fraccionado.js';
 import { formatosDeBolsa } from './formatosBolsa.js';
 import { sugerirRepartos } from './sugerirRepartos.js';
 import { saldoAnteriorDeLaHoja, ajusteDeNotas } from './saldoCliente.js';
-import { ErrorReparto, emitidosDe, mutarReparto, verificarEntregas, enriquecerEntregas, enriquecerHojas, aplicarImportesCierre, notasDeHoja, notasUnicas, hayEstadoEntrega, marcarEstadoEntregaRPC, leerPaginas, entregaNoSalio } from './repartoDatos.js';
+import { ErrorReparto, emitidosDe, mutarReparto, verificarEntregas, enriquecerEntregas, enriquecerHojas, aplicarImportesCierre, notasDeHoja, notasUnicas, hayEstadoEntrega, marcarEstadoEntregaRPC, hayCorreccionRemito, corregirRemitoRPC, leerPaginas, entregaNoSalio } from './repartoDatos.js';
 import { proximoNumeroHoja } from './numeroHojaRuta.js';
 import { comprobarEsquema } from './estadoAplicacion.js';
 import { LecturasCompartidas } from './lecturasCompartidas.js';
@@ -323,7 +323,7 @@ export async function listarHojas(req: Request & { user?: JwtPayload }, res: Res
      * pantalla.
      */
     res.json({ ok: true, desde, hasta, fecha: hasta, hojas: conCarga, siguiente,
-      capacidades: { nombre: (await comprobarEsquema()).nombre, estado_entrega: await hayEstadoEntrega() } });
+      capacidades: { nombre: (await comprobarEsquema()).nombre, estado_entrega: await hayEstadoEntrega(), corregir_remito: await hayCorreccionRemito() } });
   } catch (err: any) {
     res.status(err.status ?? 500).json({ error: err?.message ?? 'error' });
   }
@@ -1010,6 +1010,87 @@ export async function remitosAnulados(req: Request & { user?: JwtPayload }, res:
   } catch (err: any) {
     res.status(502).json({ error: `No pude consultar InfoManager para ver los remitos anulados: ${err?.message ?? 'error'}` });
   }
+}
+
+/**
+ * POST /api/hojas-ruta/:id/entregas/:comprobanteId/remito — la entrega salió con OTRO remito.
+ *
+ * Mati (06/10/2026, opción 2 para DIAZ en la hoja 3402): el RE 77382 se borró en IM y la mercadería salió
+ * con el RE 77399, que la app había emitido para ese mismo presupuesto. La hoja seguía apuntando al borrado:
+ * el aviso no se iba y el RE 77399 figuraba sin hoja. Admin o gerente, con motivo, y validando contra IM
+ * que el remito nuevo exista y sea del mismo cliente.
+ *
+ * 🔑 La entrega PASA A SER el remito nuevo (cambia su clave), igual que al editar una factura
+ * (`reemplazar_remito_en_hoja`, 054): la hoja, los pendientes y el aviso hablan del papel que viajó.
+ *
+ * 🔴 No cambia lo que se le paga al chofer: el remito nuevo tiene que ser por el importe que la hoja le
+ * cuenta a la entrega (en una cerrada, lo confirmado al cierre) y la entrega tiene que quedar con las mismas
+ * notas. Si cambió lo que salió, eso va con una nota (NC/ND), no con esto.
+ */
+export async function corregirRemitoEntrega(req: Request & { user?: JwtPayload }, res: Response) {
+  if (frenaSiNoPuede(req, res)) return;
+  if (!puedeMarcarEntrega(String(req.user?.rol ?? ''))) { res.status(403).json({ error: 'Esto lo corrige administración (admin o gerente).' }); return; }
+  const texto = String(req.body?.remito_numero ?? '').trim();
+  const numero = /^\d{1,9}$/.test(texto) ? Number(texto) : 0;
+  if (!numero) { res.status(400).json({ error: 'Escribí sólo el número del remito con el que salió.' }); return; }
+  const motivo = String(req.body?.motivo ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (motivo.length < 3) { res.status(400).json({ error: 'Escribí por qué se corrige el remito: queda registrado.' }); return; }
+  if (!(await hayCorreccionRemito())) { res.status(503).json({ error: 'Falta aplicar la migración 058 para corregir el remito. No se modificó nada.' }); return; }
+  try {
+    const { data: hoja, error } = await sb().from('hojas_ruta').select('id, numero, fecha, estado, version, cierres_importes, hojas_ruta_pedidos(*)')
+      .eq('id', String(req.params.id)).eq('tenant_id', TENANT_ID).maybeSingle();
+    if (error) throw new ErrorReparto(`No pude leer la hoja: ${error.message}`, 502);
+    if (!hoja) throw new ErrorReparto('Hoja de ruta no encontrada', 404);
+    const h: any = hoja;
+    // Antes de ir a IM: la base lo frenaría igual, pero después de esperar la consulta.
+    if (Number(h.version) !== Number(req.body?.version_esperada)) throw new ErrorReparto('La hoja cambió. Actualizá antes de continuar.');
+    if (h.estado === 'anulada') throw new ErrorReparto(`La hoja ${h.numero} está anulada.`);
+    const filas: any[] = h.hojas_ruta_pedidos ?? [];
+    const entrega = filas.find(p => String(p.im_comprobante_id) === String(req.params.comprobanteId));
+    if (!entrega) throw new ErrorReparto('La entrega ya no está en esta hoja. Actualizá.', 404);
+    if (String(entrega.im_comprobante_id) !== String(entrega.im_remito_id ?? entrega.im_comprobante_id)) {
+      throw new ErrorReparto('Esta entrega es de una hoja armada con presupuestos (antes del 08/09/2026): su remito no se corrige desde acá.');
+    }
+    // Lo que la hoja le cuenta hoy a la entrega: en una cerrada, lo confirmado al cierre.
+    const contada = aplicarImportesCierre(h, filas).find(p => String(p.im_comprobante_id) === String(entrega.im_comprobante_id));
+
+    // El remito se rehace cerca del día del reparto: una semana antes y una después de la hoja.
+    const desde = correrDias(String(h.fecha), -7), hasta = [correrDias(String(h.fecha), 7), fechaArgentina()].sort()[0];
+    const dia = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
+    const pesos = (v: unknown) => `$${Number(v).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    let ventas: any[];
+    try { ventas = await fetchVentas(desde, hasta); }
+    catch (e: any) { throw new ErrorReparto(`No pude consultar InfoManager: ${e?.message ?? 'sin respuesta'}. No se modificó nada.`, 502); }
+    const mismos = ventas.filter(v => String(v.tipo_comprobante ?? '').trim() === 'RE' && Number(v.cod_empresa) === PEDIDO_EMPRESA_DEFAULT && Number(v.numero) === numero);
+    if (!mismos.length) throw new ErrorReparto(`No encontré el RE ${numero} de Casa Central en InfoManager entre el ${dia(desde)} y el ${dia(hasta)}. Revisá el número.`);
+    const vigentes = mismos.filter(v => String(v.anulada ?? '').trim().toUpperCase() !== 'S');
+    if (!vigentes.length) throw new ErrorReparto(`El RE ${numero} está anulado en InfoManager.`);
+    if (vigentes.length > 1) throw new ErrorReparto(`Hay ${vigentes.length} RE ${numero} vigentes en InfoManager: no sé cuál es. No se modificó nada.`);
+    const id = String(vigentes[0].id);
+    if (id === String(entrega.im_comprobante_id)) throw new ErrorReparto(`La entrega ya es el RE ${numero}.`);
+    // El listado dice cuál es; la cabecera, cómo está AHORA.
+    const cab = await cabeceraComprobante(id);
+    if (cab.existe == null || (cab.existe && cab.anulada == null)) throw new ErrorReparto(`No pude confirmar en InfoManager que el RE ${numero} esté vigente. Probá de nuevo en un rato; no se modificó nada.`, 502);
+    if (!cab.existe || cab.anulada) throw new ErrorReparto(`El RE ${numero} ya no está vigente en InfoManager.`);
+    if (Number(cab.cod_cliente) !== Number(entrega.cod_cliente)) {
+      throw new ErrorReparto(`El RE ${numero} es del cliente ${cab.cod_cliente}, no de ${entrega.cliente_nombre ?? 'esta entrega'} (${entrega.cod_cliente}).`);
+    }
+    if (cab.total == null || !contada || Math.abs(Number(cab.total) - Number(contada.total)) > 0.01) {
+      throw new ErrorReparto(`El RE ${numero} es por ${pesos(cab.total)} y la entrega cuenta ${pesos(contada?.total)}. Corregir el remito no cambia importes: si cambió lo que salió, va una nota (NC/ND).`);
+    }
+    // 🔴 Con el remito nuevo la entrega queda atada a su factura y a sus notas: tienen que ser las mismas.
+    const notasDe = async (fila: any) => (await notasDeHoja(String(h.id), await enriquecerEntregas([fila], false, false)))[0].notas
+      .map((n: any) => String(n.id)).sort().join(',');
+    if (await notasDe(entrega) !== await notasDe({ ...entrega, im_comprobante_id: id, im_remito_id: id, im_numero: numero, im_remito_numero: numero })) {
+      throw new ErrorReparto(`Con el RE ${numero} la entrega quedaría con otras notas (NC/ND) y cambiaría lo que se le paga al chofer. No se modificó nada: avisá a sistemas.`);
+    }
+    const r = await corregirRemitoRPC(req.user?.sub, {
+      hoja_id: String(h.id), im_comprobante_id: String(entrega.im_comprobante_id), remito_id: id, remito_numero: numero,
+      remito_fecha: cab.fecha, motivo, version_esperada: req.body?.version_esperada,
+    });
+    avisosAnulados.clear(); invalidarVista(); invalidarRemitos();   // el aviso se va y el remito nuevo deja de figurar sin hoja
+    res.json({ ok: true, ...(r as object) });
+  } catch (err: any) { res.status(err.status ?? 500).json({ error: err.message }); }
 }
 
 export async function quitarPedido(req: Request & { user?: JwtPayload }, res: Response) {

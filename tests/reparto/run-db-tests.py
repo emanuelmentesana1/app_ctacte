@@ -21,6 +21,7 @@ legacy = [
 new = ['039_integridad_facturacion.sql', '040_integridad_reparto.sql', '041_integridad_fiscal_cruzada.sql', '042_importes_al_cierre.sql', '043_notas_existentes_nd.sql', '044_nombre_de_la_hoja.sql', '054_editar_factura.sql']
 # La lista es explícita: existen dos migraciones históricas con prefijo 035.
 new.append('055_pendientes_de_entrega.sql')
+new += ['057_estado_de_la_entrega.sql', '058_corregir_remito_de_la_entrega.sql']
 bootstrap = '''CREATE ROLE service_role BYPASSRLS;
 CREATE ROLE anon;
 CREATE ROLE authenticated;
@@ -62,5 +63,6 @@ try:
     subprocess.run([sys.executable,str(tests/'db-readiness-checks.py'),container],check=True)
     subprocess.run([sys.executable,str(tests/'db-cierre-importes.py'),container],check=True)
     subprocess.run([sys.executable,str(tests/'db-editar-factura.py'),container],check=True)
+    subprocess.run([sys.executable,str(tests/'db-corregir-remito.py'),container],check=True)
 finally:
     subprocess.run(['docker','stop','--time','5',container],stdout=subprocess.DEVNULL,check=False)

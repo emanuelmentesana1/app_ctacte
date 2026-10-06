@@ -131,7 +131,9 @@ export function LiquidacionView() {
                     <span>
                         {anulados.length === 1 ? '1 entrega se paga' : `${anulados.length} entregas se pagan`}, pero su remito figura anulado o borrado en InfoManager:{' '}
                         {anulados.map(a => `${a.cliente_nombre ?? 'cliente'} (hoja ${a.hoja}${a.total != null ? `, ${pesos(Number(a.total))}` : ''})`).join(' · ')}.
-                        {' '}Si no salieron, marcalas «No salió» en la hoja; si salieron con otro remito, no hace falta.
+                        {' '}{anulados.length === 1
+                            ? 'Si no salió, marcala «No salió» en la hoja; si salió con otro remito, usá «Corregir remito» en la hoja.'
+                            : 'Si no salieron, marcalas «No salió» en la hoja; si salieron con otro remito, usá «Corregir remito» en la hoja.'}
                     </span>
                 </div>
             )}
@@ -185,7 +187,9 @@ export function LiquidacionView() {
 
                     {!!c.no_salieron?.entregas && (
                         <div className="lq-desglose">
-                            no {c.no_salieron.entregas === 1 ? 'salió 1 entrega' : `salieron ${c.no_salieron.entregas} entregas`} por {pesos(c.no_salieron.importe)}: no se pagan (marcadas en la hoja)
+                            {c.no_salieron.entregas === 1
+                                ? <>no salió 1 entrega por {pesos(c.no_salieron.importe)}: no se paga (marcada en la hoja)</>
+                                : <>no salieron {c.no_salieron.entregas} entregas por {pesos(c.no_salieron.importe)}: no se pagan (marcadas en la hoja)</>}
                         </div>
                     )}
 

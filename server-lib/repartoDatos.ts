@@ -53,6 +53,31 @@ export async function marcarEstadoEntregaRPC(actor: string | undefined, datos: R
   return data;
 }
 
+/** ¿Ya se corrió la migración 058? Mismo criterio que la 057: se mira la columna. */
+let correccionRemitoVista: { hasta: number; hay: boolean } | null = null;
+export async function hayCorreccionRemito(): Promise<boolean> {
+  if (correccionRemitoVista && correccionRemitoVista.hasta > Date.now()) return correccionRemitoVista.hay;
+  const { error } = await sb().from('hojas_ruta_pedidos').select('remito_historial').limit(1);
+  const hay = !error;
+  correccionRemitoVista = { hay, hasta: Date.now() + (hay ? 60_000 : 5_000) };
+  return hay;
+}
+
+/**
+ * La entrega pasa a ser otro remito (migración 058). Función propia por lo mismo que «no salió»: se
+ * descubre en hojas cerradas. Bajo el lock del reparto, con la versión de la hoja y con historial.
+ */
+export async function corregirRemitoRPC(actor: string | undefined, datos: Record<string, unknown>) {
+  const { data, error } = await sb().rpc('corregir_remito_entrega', { p_tenant: TENANT_ID, p_actor: actor, p_datos: datos });
+  if (error) {
+    if (['PGRST202', '42883', '42703'].includes(error.code)) throw new ErrorReparto('Falta aplicar la migración 058 para corregir el remito. No se modificó nada.', 503);
+    if (error.code === '23505') throw new ErrorReparto('Ese remito ya está en otra hoja de ruta. No se modificó nada.', 409);
+    throw new ErrorReparto(error.message, 409);
+  }
+  if (data == null) throw new ErrorReparto('La base no confirmó el cambio. Verificá la migración 058.', 503);
+  return data;
+}
+
 /**
  * Vincular una nota que ya existe en IM. Función propia, no `mutar_reparto`: la identidad de la
  * factura de destino se resuelve dentro del mismo lock y se coteja contra la que vio el operador.
@@ -430,6 +455,13 @@ export async function leerPaginas(consulta: () => any): Promise<any[]> {
   throw new ErrorReparto('La consulta supera el límite de seguridad. Acotá el rango; no se muestran totales parciales.', 422);
 }
 
+/**
+ * La clave de la entrega y las que tuvo antes de corregirle el remito (migración 058), de la más nueva a
+ * la más vieja. 🪤 El respaldo del cierre no se reescribe: guarda la entrega con la clave de ese día.
+ */
+const clavesDeLaEntrega = (p: any): string[] => [String(p.im_comprobante_id),
+  ...(Array.isArray(p.remito_historial) ? p.remito_historial : []).map((c: any) => String(c?.clave_anterior ?? '')).filter(Boolean).reverse()];
+
 /** Aplica el último cierre confirmado; los cierres antiguos conservan el circuito previo. */
 export function aplicarImportesCierre(hoja: any, pedidos: any[]) {
   if (hoja.estado !== 'cerrada') return pedidos;
@@ -438,7 +470,7 @@ export function aplicarImportesCierre(hoja: any, pedidos: any[]) {
   const importes = new Map<string, any>((cierre.pedidos ?? []).map((p: any) => [String(p.im_comprobante_id), p]));
   if (importes.size !== pedidos.length) throw new ErrorReparto('El respaldo del cierre no coincide con las entregas. Revisá la hoja.');
   return pedidos.map(p => {
-    const c = importes.get(String(p.im_comprobante_id));
+    const c = clavesDeLaEntrega(p).map(k => importes.get(k)).find(Boolean);
     if (!c || Number(c.cod_cliente) !== Number(p.cod_cliente) || c.total == null || !Number.isFinite(Number(c.total))) throw new ErrorReparto('Falta el importe confirmado al cierre de la entrega.');
     return { ...p, total: Number(c.total), importe_fuente: 'cierre_hoja' };
   });

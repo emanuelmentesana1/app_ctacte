@@ -57,6 +57,14 @@ it('la misma hoja conserva el total vigente al pasar de abierta a cerrada',async
  const cerrada=await enriquecerHojas([h]);expect(cerrada[0].total).toBe(80);expect(cerrada[0].total_snapshot).toBe(100);expect(m.ventas).not.toHaveBeenCalled();
  h.estado='abierta';m.ventas.mockResolvedValue([venta(20,'FA',{total:70})]);expect((await enriquecerHojas([h]))[0].total).toBe(70);
 });
+it('una entrega a la que se le corrigió el remito después del cierre conserva el importe del cierre (058)',async()=>{
+ m.tablas.presupuestos_facturados={data:[{im_comprobante_id:'1',im_remito_id:'11',im_factura_id:'20',cod_cliente:7,cod_empresa:1,total:999,facturado_at:'2026-09-11'}],error:null};
+ const h:any={estado:'cerrada',cierres_importes:[{pedidos:[{im_comprobante_id:'10',cod_cliente:7,cod_empresa:null,im_factura_id:null,total:80}]}],
+  hojas_ruta_pedidos:[{im_comprobante_id:'11',cod_cliente:7,total:80,remito_historial:[{clave_anterior:'10',remito_id:'11',remito_numero:77399}]}]};
+ expect((await enriquecerHojas([h]))[0]).toMatchObject({im_comprobante_id:'11',total:80,importe_fuente:'cierre_hoja'});
+ h.hojas_ruta_pedidos[0].remito_historial=[];
+ await expect(enriquecerHojas([h])).rejects.toThrow('importe confirmado');
+});
 it('listar conserva la hoja legacy y las demás aunque una factura no sea verificable',async()=>{
  m.ventas.mockResolvedValue([venta(20,'FA',{total:80}),venta(21,'FA',{cod_cliente:99})]);
  const pedidos=[{im_comprobante_id:'10',im_factura_id:'20',cod_cliente:7,cod_empresa:null,total:100,fecha:'2026-09-11'},

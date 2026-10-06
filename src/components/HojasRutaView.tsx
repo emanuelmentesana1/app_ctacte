@@ -86,6 +86,8 @@ interface HojaPedido {
     /** 🔄 05/10/2026: 'no_salio' = la mercadería no salió; no cuenta en la liquidación del chofer. */
     estado_entrega?: string | null;
     estado_entrega_motivo?: string | null;
+    /** 🔄 06/10/2026: cada vez que se le corrigió el remito (salió con otro). La última va al final. */
+    remito_historial?: Array<{ numero_anterior?: number | null; remito_numero?: number | null; motivo?: string | null; at?: string | null }>;
 }
 
 interface Hoja {
@@ -266,6 +268,9 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
      */
     const [hayEstadoEntrega, setHayEstadoEntrega] = useState(false);
     const puedeMarcarEntregas = hayEstadoEntrega && ['admin', 'gerente'].includes(String(getUser()?.rol ?? ''));
+    /** Corregir el remito (Mati, 06/10/2026): mismos permisos, y sólo con la migración 058 corrida. */
+    const [hayCorreccionRemito, setHayCorreccionRemito] = useState(false);
+    const puedeCorregirRemito = hayCorreccionRemito && ['admin', 'gerente'].includes(String(getUser()?.rol ?? ''));
     /**
      * Entregas cuyo remito figura anulado o borrado en IM (Mati, 05/10/2026). Es un AVISO: puede que no
      * haya salido, o que haya salido con otro remito (DIAZ, hoja 3402). Se pide aparte: va a IM.
@@ -301,7 +306,7 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
             if (!h.ok) throw new Error(d?.error ?? 'No se pudieron consultar las hojas');
             for (const hoja of d?.hojas ?? []) versionesHoja.current.set(hoja.id, hoja.version);
             setHojas(previas => antes ? [...previas, ...(d?.hojas ?? [])] : d?.hojas ?? []);
-            setSiguienteHoja(d?.siguiente ?? null); setPuedeNombrar(d?.capacidades?.nombre === true); setHayEstadoEntrega(d?.capacidades?.estado_entrega === true); lectura.confirmar();
+            setSiguienteHoja(d?.siguiente ?? null); setPuedeNombrar(d?.capacidades?.nombre === true); setHayEstadoEntrega(d?.capacidades?.estado_entrega === true); setHayCorreccionRemito(d?.capacidades?.corregir_remito === true); lectura.confirmar();
         } catch (e: any) { if (lectura.vigente()) setErrorHojas(e?.message ?? 'No se pudieron consultar las hojas'); }
         finally { if (lectura.vigente()) setCargandoHojas(false); }
     }, [desde, hasta, historico, iniciarHojas]);
@@ -711,6 +716,31 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
         } finally { setTrabajando(false); operacion.terminar(); }
     }
 
+    /**
+     * La entrega salió con OTRO remito (DIAZ, hoja 3402: el RE 77382 se borró en IM y salió con el 77399).
+     * La entrega pasa a ser el remito nuevo. El servidor verifica contra IM que exista, que sea del mismo
+     * cliente y por el mismo importe, y que no cambien sus notas: lo que se le paga al chofer no se mueve.
+     */
+    async function corregirRemito(h: Hoja, p: HojaPedido) {
+        const quien = p.cliente_nombre ?? 'la entrega';
+        const numero = prompt(`¿Con qué remito salió ${quien}?\n\nEscribí el número del RE. El RE ${p.im_numero ?? '—'} figura anulado o borrado en InfoManager.`, '');
+        if (numero == null) return;
+        if (!/^\d+$/.test(numero.trim())) { setAviso('Escribí sólo el número del remito, por ejemplo 77399.'); return; }
+        const motivo = prompt('¿Por qué se corrige?\n\nQueda registrado, junto con el remito anterior.', `el RE ${p.im_numero ?? ''} se borró en IM; salió con el RE ${numero.trim()}`);
+        if (motivo == null) return;
+        if (motivo.trim().length < 3) { setAviso('Escribí por qué se corrige el remito: queda registrado.'); return; }
+        if (!operacion.comenzar()) return;
+        setTrabajando(true); setAviso(null); setInfo(`Buscando el RE ${numero.trim()} en InfoManager…`);
+        try {
+            const ok = await pedir(`/api/hojas-ruta/${h.id}/entregas/${encodeURIComponent(p.im_comprobante_id)}/remito`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ remito_numero: numero.trim(), motivo, version_esperada: versionesHoja.current.get(h.id) }),
+            }, 'No se pudo corregir el remito');
+            setInfo(ok ? `${quien}: ahora es el RE ${numero.trim()} (antes ${p.im_numero ?? '—'}). Lo que se le paga al chofer no cambia.` : null);
+            await cargarHojas();
+        } finally { setTrabajando(false); operacion.terminar(); }
+    }
+
     async function borrarHoja(hojaId: string, numero: number) {
         if (!confirm(`¿Borrar la hoja ${numero}? Los pedidos vuelven a la lista de pendientes.`)) return;
         if (!operacion.comenzar()) return;
@@ -1105,6 +1135,7 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                             {h.pedidos.map(p => {
                               const emitido = p.im_factura_numero != null || !!p.facturado_at;
                               const noSalio = p.estado_entrega === 'no_salio';
+                              const correccion = p.remito_historial?.at(-1);
                               return (
                                 <div className={`hr-hoja-ped${noSalio ? ' no-salio' : ''}`} key={p.im_comprobante_id}>
                                     <div>
@@ -1114,7 +1145,10 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                                                 <span className="hr-badge grave" title={`No salió: ${p.estado_entrega_motivo ?? ''}. No cuenta en la liquidación del chofer.`}>no salió</span>
                                             )}
                                             {!noSalio && anuladosEnIM.has(String(p.im_comprobante_id)) && (
-                                                <span className="hr-badge aviso" title="El remito figura anulado o borrado en InfoManager. Si la mercadería no salió, marcala «No salió»; si salió con otro remito, revisá el vínculo.">remito anulado en IM</span>
+                                                <span className="hr-badge aviso" title="El remito figura anulado o borrado en InfoManager. Si la mercadería no salió, marcala «No salió»; si salió con otro remito, usá «Corregir remito».">remito anulado en IM</span>
+                                            )}
+                                            {correccion && (
+                                                <span className="hr-badge tenue" title={`Antes era el RE ${correccion.numero_anterior ?? '—'}. ${correccion.motivo ?? ''}`}>remito corregido</span>
                                             )}
                                             {/* Lo que se emitió queda a la vista: es el registro de qué salió de
                                                 este presupuesto, y en IM ese vínculo no existe. */}
@@ -1137,6 +1171,13 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
                                         <button className="hr-btn ghost chico hr-no-salio" onClick={() => void marcarNoSalio(h, p, !noSalio)} disabled={trabajando}
                                                 title={noSalio ? 'Volver a contarla en la liquidación' : 'La mercadería no salió: deja de contar en la liquidación del chofer'}>
                                             {noSalio ? 'Salió' : 'No salió'}
+                                        </button>
+                                    )}
+                                    {/* Sólo donde hace falta: la entrega con el remito anulado o borrado en IM. */}
+                                    {puedeCorregirRemito && !noSalio && anuladosEnIM.has(String(p.im_comprobante_id)) && (
+                                        <button className="hr-btn ghost chico hr-no-salio" onClick={() => void corregirRemito(h, p)} disabled={trabajando}
+                                                title="Salió con otro remito: la entrega pasa a ser el remito nuevo. No cambia lo que se le paga al chofer">
+                                            Corregir remito
                                         </button>
                                     )}
                                     <button
