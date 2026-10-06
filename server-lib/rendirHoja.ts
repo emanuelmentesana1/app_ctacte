@@ -251,7 +251,7 @@ async function planDeLaHoja(hoja: FilaHoja, efectivo: LineaEfectivo[], existente
     // Otros cobros cargados en la app para esos clientes (no los de esta hoja).
     const propios = new Set(existentes.map(r => r.id));
     const { data: deApp } = await sb().from('comprobantes_pago')
-        .select('id, cod_cliente, monto, fecha_comprobante, created_at, status, infomanager_recibo_id')
+        .select('id, cod_cliente, monto, fecha_comprobante, created_at, status, infomanager_recibo_id, factura_asociada')
         .eq('tenant_id', TENANT_ID).in('cod_cliente', cods)
         .gte('created_at', `${sumarDias(hoja.fecha, -(VENTANA_APP + 3))}T00:00:00Z`)
         .lte('created_at', `${sumarDias(hoja.fecha, VENTANA_APP + 10)}T23:59:59Z`);

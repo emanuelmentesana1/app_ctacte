@@ -135,6 +135,39 @@ describe('planDeEmision — qué recibos emite la app y cuáles no', () => {
         expect(mismoImporte[0].motivo).toMatch(/repetido/i);
     });
 
+    describe('pagos parecidos (Mati, 06/10/2026: Seranil en la 3450 «es de otro día y de otra factura»)', () => {
+        const reciboApp = (p: Partial<ReciboAppLite>): ReciboAppLite => ({
+            id: 'app1', cod_cliente: 722, monto: 412_000, fecha_comprobante: HOJA.fecha, created_at: `${HOJA.fecha}T15:00:00Z`,
+            status: 'imputado', infomanager_recibo_id: '58000001', factura_asociada: '#FA9·$412000.00', ...p,
+        });
+
+        it('🔑 un pago parecido de OTRO día no es el mismo pago: se emite', () => {
+            const [p] = planDeEmision({ ...base, enApp: [reciboApp({ fecha_comprobante: '2026-09-29', created_at: '2026-09-29T15:00:00Z' })] });
+            expect(p.estado).toBe('listo');
+        });
+
+        it('del MISMO día pero a OTRA factura, tampoco frena', () => {
+            const [p] = planDeEmision({ ...base, enApp: [reciboApp({ factura_asociada: '#FA9·$412000.00' })] });
+            expect(p.estado).toBe('listo');
+        });
+
+        it('🔴 del mismo día, por un importe parecido y a la MISMA factura, frena', () => {
+            const [p] = planDeEmision({ ...base, enApp: [reciboApp({ factura_asociada: '#FA2·$412000.00' })] });
+            expect(p.estado).toBe('salteado');
+            expect(p.motivo).toMatch(/repetido/i);
+        });
+
+        it('🔴 del mismo día y sin saber a qué factura fue (todavía sin aprobar), frena: mejor revisarlo', () => {
+            const [p] = planDeEmision({ ...base, enApp: [reciboApp({ status: 'pendiente_revision', infomanager_recibo_id: null, factura_asociada: null, monto: 412_300 })] });
+            expect(p.estado).toBe('salteado');
+        });
+
+        it('un recibo de IM parecido de otro día (no de Caja Repartos) no frena', () => {
+            const [p] = planDeEmision({ ...base, enIM: [reciboIM({ cuenta: '1120003', importe: 412_300, fecha: '2026-10-08' })] });
+            expect(p.estado).toBe('listo');
+        });
+    });
+
     it('🔴 si IM no contestó, no se emite nada: no se puede descartar un duplicado', () => {
         const [p] = planDeEmision({ ...base, enIM: null });
         expect(p.estado).toBe('salteado');

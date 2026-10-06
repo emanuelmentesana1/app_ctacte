@@ -163,15 +163,6 @@ export function planDeEmision(e: EntradaPlan): PasoEmision[] {
             && Math.abs(diasEntre(e.hoja.fecha, String(r.fecha).slice(0, 10))) <= VENTANA_A_MANO);
         if (aMano) return salteado(`Ya está cargado a mano en IM (recibo ${aMano.numero ?? aMano.id_recibo}, $${Number(aMano.importe_total).toFixed(2)}): no se emite de nuevo.`, { recibo_im: String(aMano.id_recibo) });
 
-        const dup = posiblesDuplicados(
-            { cod_cliente: l.cod_cliente, monto: l.importe, fecha: e.hoja.fecha, id: previo?.id, infomanager_recibo_id: null },
-            e.enApp, e.enIM.filter(r => !propios.has(String(r.id_recibo))),
-        );
-        if (dup.app.length || dup.im.length) {
-            const d = dup.im[0] ? `recibo ${dup.im[0].numero ?? dup.im[0].id_recibo} del ${dup.im[0].fecha}` : `un pago cargado en la app el ${dup.app[0].fecha}`;
-            return salteado(`Puede estar repetido: hay ${d} por un importe parecido. Revisalo antes de emitir.`);
-        }
-
         const pendientes = e.pendientesDe(l.cod_cliente);
         if (pendientes == null) return salteado('IM no devolvió las facturas pendientes del cliente: probá en unos minutos.');
         // Como la ve Anto en Cobranzas: "FA 3-142847".
@@ -199,6 +190,22 @@ export function planDeEmision(e: EntradaPlan): PasoEmision[] {
             if (Math.abs(imputado - l.importe) > TOLERANCIA_FIFO) {
                 return salteado(`Paga más que toda su deuda pendiente ($${centavos(imputado).toFixed(2)}): el resto es anticipo y la API de IM no lo hace. Cargalo a mano en IM.`, conPendientes);
             }
+        }
+        // ¿Ya está ese pago? 🔄 Mati (06/10/2026, Seranil en la 3450: «es de otro día y de otra factura»): un pago
+        // parecido de OTRO día o a OTRA factura no es el mismo pago. Frena sólo si es del mismo día, por un importe
+        // parecido y a la misma factura; si de ese pago no se sabe a qué factura fue (un recibo de IM, un pago sin
+        // aprobar), alcanzan el día y el importe: mejor que lo mire una persona.
+        const dup = posiblesDuplicados(
+            { cod_cliente: l.cod_cliente, monto: l.importe, fecha: e.hoja.fecha, id: previo?.id, infomanager_recibo_id: null },
+            e.enApp, e.enIM.filter(r => !propios.has(String(r.id_recibo))),
+        );
+        const destino = new Set(elegidas.map(([id]) => id));
+        const facturasDe = (id: string) => [...String(e.enApp.find(r => r.id === id)?.factura_asociada ?? '').matchAll(/#([^·,#]+)·/g)].map(m => m[1]);
+        const enApp = dup.app.find(a => a.dias === 0 && (facturasDe(a.id).length === 0 || facturasDe(a.id).some(f => destino.has(f))));
+        const enIM = dup.im.find(x => x.dias === 0);
+        if (enApp || enIM) {
+            const d = enIM ? `recibo ${enIM.numero ?? enIM.id_recibo} del mismo día` : 'un pago cargado en la app del mismo día';
+            return salteado(`Puede estar repetido: hay ${d} por un importe parecido${enApp && facturasDe(enApp.id).length ? ' y a la misma factura' : ''}. Revisalo antes de emitir.`, conPendientes);
         }
         if (listos >= e.tope) return { ...base, estado: 'en_espera', motivo: `Tope del piloto: ${e.tope} por tanda.`, recibo_app_id: previo?.id ?? null, ...conPendientes };
         listos += 1;

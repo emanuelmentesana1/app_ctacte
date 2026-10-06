@@ -17,6 +17,8 @@ export interface ReciboAppLite {
     infomanager_recibo_id: string | null;
     created_by_rol?: string | null;
     created_by_nombre?: string | null;
+    /** A qué facturas fue, como lo guarda la app al imputar ("#58904032·$306842.00,…"); null si no se sabe. */
+    factura_asociada?: string | null;
 }
 
 export interface ReciboIMLite {
