@@ -23,6 +23,7 @@ const m = vi.hoisted(() => ({
   mutarReparto: vi.fn(),
   anularConservandoCabecera: vi.fn(),
   comprobantesPendientesCliente: vi.fn(),
+  pagadoDeFactura: vi.fn(),
 }));
 
 vi.mock('./infomanager.js', () => ({
@@ -30,6 +31,7 @@ vi.mock('./infomanager.js', () => ({
   anularComprobante: m.anularComprobante,
   anularConservandoCabecera: m.anularConservandoCabecera,
   comprobantesPendientesCliente: m.comprobantesPendientesCliente,
+  pagadoDeFactura: m.pagadoDeFactura,
   fechaArgentina: () => '2026-09-22',
   invalidarIM: vi.fn(),
 }));
@@ -362,6 +364,7 @@ describe('anular una factura emitida', () => {
     });
     m.anularConservandoCabecera.mockImplementation(async () => { faAnulada = true; return { ok: true }; });
     m.comprobantesPendientesCliente.mockResolvedValue([{ id: 'fa-viva', saldo: 1000 }]);
+    m.pagadoDeFactura.mockResolvedValue(null);
   });
 
   it('🔴 anula la factura, después el remito (el stock vuelve) y libera el pedido', async () => {
@@ -396,6 +399,24 @@ describe('anular una factura emitida', () => {
     m.comprobantesPendientesCliente.mockResolvedValue([]);
     const r = await anular();
     expect(r.status).toBe(409);
+    expect(m.anularConservandoCabecera).not.toHaveBeenCalled();
+  });
+
+  /** 🔴 06/10/2026 — una factura fechada mañana no figura en pendientes: se confirma con el reporte de facturas. */
+  it('🔑 fecha adelantada sin pagos (no figura en pendientes, el reporte dice $0): anula', async () => {
+    m.comprobantesPendientesCliente.mockResolvedValue([]);
+    m.pagadoDeFactura.mockResolvedValue({ pagado: 0, saldo: 1000 });
+    const r = await anular();
+    expect(r.status).toBe(200);
+    expect(m.anularConservandoCabecera).toHaveBeenCalled();
+  });
+
+  it('🔴 fecha adelantada con un pago según el reporte: no anula', async () => {
+    m.comprobantesPendientesCliente.mockResolvedValue([]);
+    m.pagadoDeFactura.mockResolvedValue({ pagado: 250, saldo: 750 });
+    const r = await anular();
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatch(/\$250 cobrados/);
     expect(m.anularConservandoCabecera).not.toHaveBeenCalled();
   });
 

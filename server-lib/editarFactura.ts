@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { JwtPayload } from './auth.js';
 import { sb, TENANT_ID } from './supabase.js';
 import {
-  anularComprobante, anularConservandoCabecera, cabeceraComprobante, comprobantesPendientesCliente,
+  anularComprobante, anularConservandoCabecera, cabeceraComprobante, comprobantesPendientesCliente, pagadoDeFactura,
   fetchArticulosCatalogo, fetchClientesIMCon, invalidarIM, leerComprobante,
 } from './infomanager.js';
 import { emitirFactura, emitirRemito, emitirRemitoMasivo, letraDeFactura, type ResultadoEmision } from './facturarIM.js';
@@ -108,8 +108,13 @@ async function armar(idFactura: string, body: any) {
     // 🔴 Un pago imputado quedaría colgando de una factura anulada.
     const pendientes = await comprobantesPendientesCliente(Number(fila.cod_cliente), Number(fila.cod_empresa) || 1);
     const pend = pendientes.find(p => String(p.id) === idFactura);
-    if (!pend || Math.abs(Number(pend.saldo) - Number(fa.cabecera.total)) > 0.5) {
-      const cobrado = pend ? Number(fa.cabecera.total) - Number(pend.saldo) : Number(fa.cabecera.total);
+    // 🪤 Una factura con fecha FUTURA no figura en pendientes (FA B 51277, 06/10/2026): se confirma
+    // con /reportes/facturas. Si tampoco aparece ahí, se frena: no se puede afirmar que no tenga pagos.
+    const reporte = pend ? null : await pagadoDeFactura(idFactura, String(fa.cabecera.fecha ?? ''));
+    const sinPagos = pend ? Math.abs(Number(pend.saldo) - Number(fa.cabecera.total)) <= 0.5
+      : !!reporte && reporte.pagado <= 0.5 && Math.abs(reporte.saldo - Number(fa.cabecera.total)) <= 0.5;
+    if (!sinPagos) {
+      const cobrado = pend ? Number(fa.cabecera.total) - Number(pend.saldo) : reporte ? reporte.pagado : Number(fa.cabecera.total);
       throw new NoSePuede(`La factura ${fila.im_factura_numero} tiene $${Math.round(cobrado).toLocaleString('es-AR')} cobrados. Desimputá el recibo en InfoManager antes de editarla, o corregila con notas.`);
     }
     const [cliente] = (await fetchClientesIMCon([Number(fila.cod_cliente)])).filter((c: any) => Number(c.cod_cliente) === Number(fila.cod_cliente));

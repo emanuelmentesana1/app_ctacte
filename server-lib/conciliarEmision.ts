@@ -31,7 +31,7 @@ import type { Request, Response } from 'express';
 import type { JwtPayload } from './auth.js';
 import { sb, TENANT_ID } from './supabase.js';
 import { frenaSiNoPuede } from './facturarPresupuestos.js';
-import { anularComprobante, anularConservandoCabecera, cabeceraComprobante, comprobantesPendientesCliente, fechaArgentina, invalidarIM } from './infomanager.js';
+import { anularComprobante, anularConservandoCabecera, cabeceraComprobante, comprobantesPendientesCliente, pagadoDeFactura, fechaArgentina, invalidarIM } from './infomanager.js';
 import { invalidarVista } from './vistaPresupuestos.js';
 import { invalidarRemitos } from './vistaRemitos.js';
 import { mutarReparto } from './repartoDatos.js';
@@ -381,8 +381,17 @@ export async function anularFacturaEmitida(req: Request & { user?: JwtPayload },
     try { pendientes = await comprobantesPendientesCliente(Number(fila.cod_cliente), Number(fila.cod_empresa) || 1); }
     catch (e: any) { res.status(502).json({ error: `No pude verificar si la factura tiene pagos: ${e?.message ?? 'sin respuesta'}. No se anuló nada.` }); return; }
     const pend = pendientes.find(p => String(p.id) === String(fila.im_factura_id));
-    if (!pend || Math.abs(Number(pend.saldo) - Number(fa.total)) > 0.5) {
-      const pagado = pend ? Number(fa.total) - Number(pend.saldo) : Number(fa.total);
+    // 🪤 Con fecha FUTURA la factura no figura en pendientes (FA B 51277, 06/10/2026): se confirma
+    // con /reportes/facturas. Si tampoco aparece, se frena.
+    let reporte: { pagado: number; saldo: number } | null = null;
+    if (!pend) {
+      try { reporte = await pagadoDeFactura(String(fila.im_factura_id), String(fa.fecha ?? '')); }
+      catch (e: any) { res.status(502).json({ error: `No pude verificar si la factura tiene pagos: ${e?.message ?? 'sin respuesta'}. No se anuló nada.` }); return; }
+    }
+    const sinPagos = pend ? Math.abs(Number(pend.saldo) - Number(fa.total)) <= 0.5
+      : !!reporte && reporte.pagado <= 0.5 && Math.abs(reporte.saldo - Number(fa.total)) <= 0.5;
+    if (!sinPagos) {
+      const pagado = pend ? Number(fa.total) - Number(pend.saldo) : reporte ? reporte.pagado : Number(fa.total);
       res.status(409).json({ error: `La factura ${fila.im_factura_numero} tiene $${Math.round(pagado).toLocaleString('es-AR')} cobrados. Desimputá el recibo en InfoManager antes de anularla: no se anuló nada.` });
       return;
     }

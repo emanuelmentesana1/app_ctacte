@@ -13,6 +13,7 @@ const m = vi.hoisted(() => ({
   anularConservandoCabecera: vi.fn(),
   anularComprobante: vi.fn(),
   comprobantesPendientesCliente: vi.fn(),
+  pagadoDeFactura: vi.fn(),
   emitirFactura: vi.fn(),
   emitirRemito: vi.fn(),
   emitirRemitoMasivo: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('./infomanager.js', () => ({
   anularConservandoCabecera: m.anularConservandoCabecera,
   anularComprobante: m.anularComprobante,
   comprobantesPendientesCliente: m.comprobantesPendientesCliente,
+  pagadoDeFactura: m.pagadoDeFactura,
   fetchArticulosCatalogo: async () => new Map([
     [650, { descripcion: 'MANI C/ CHOCOLATE', equivalencia_um: 1 }],
     [663, { descripcion: 'PASTA DE MANI NATURAL X 3K', equivalencia_um: 3 }],
@@ -103,6 +105,7 @@ beforeEach(() => {
   unaFila = { presupuestos_facturados: { data: FILA, error: null } };
   lecturas = { facturas_correcciones: { data: [], error: null }, hojas_ruta_ajustes: { data: [], error: null }, hojas_ruta_pedidos: { data: [{ hojas_ruta: { numero: 3440, estado: 'abierta' } }], error: null } };
   m.comprobantesPendientesCliente.mockResolvedValue([{ id: '58995098', saldo: 323066.70 }]);
+  m.pagadoDeFactura.mockResolvedValue(null);
   m.anularConservandoCabecera.mockImplementation(async (id: string) => { m.comprobantes[id].cabecera = { ...m.comprobantes[id].cabecera, anulada: true }; return { ok: true }; });
   m.anularComprobante.mockImplementation(async ({ id }: any) => { m.comprobantes[id].cabecera = { ...m.comprobantes[id].cabecera, anulada: true }; return { ok: true, raw: null }; });
   m.emitirFactura.mockImplementation(async (d: any) => {
@@ -150,6 +153,37 @@ describe('previsualizar (no toca nada)', () => {
     const r = await llamar({ im_factura_id: '58995098', renglones: [{ cod_articulo: 650, cantidad: 10, precio: 9936 }, { cod_articulo: 685, cantidad: 2, precio: 34945.592 }] });
     expect(r.status).toBe(409);
     expect(r.body.error).toMatch(/300\.000 cobrados/);
+  });
+
+  /**
+   * 🔴 06/10/2026 — FA B 51277 (MEDINA DORA): fechada MAÑANA, el reporte de pendientes de IM no la
+   * trae, y la app decía "$336.254 cobrados" sin un solo recibo. Se confirma con /reportes/facturas.
+   */
+  describe('factura con fecha adelantada (no figura en pendientes)', () => {
+    const cambio = { im_factura_id: '58995098', renglones: [{ cod_articulo: 650, cantidad: 10, precio: 9936 }, { cod_articulo: 685, cantidad: 2, precio: 34945.592 }] };
+    it('🔑 sin pagos según el reporte de facturas: deja editar', async () => {
+      m.comprobantesPendientesCliente.mockResolvedValue([]);
+      m.pagadoDeFactura.mockResolvedValue({ pagado: 0, saldo: 323066.70 });
+      const r = await llamar(cambio);
+      expect(r.body.error ?? '').not.toMatch(/cobrados/);
+      expect(r.status).toBe(200);
+      expect(m.pagadoDeFactura).toHaveBeenCalledWith('58995098', '2026-09-29');
+    });
+    it('🔴 con un pago imputado: frena', async () => {
+      m.comprobantesPendientesCliente.mockResolvedValue([]);
+      m.pagadoDeFactura.mockResolvedValue({ pagado: 100000, saldo: 223066.70 });
+      const r = await llamar(cambio);
+      expect(r.status).toBe(409);
+      expect(r.body.error).toMatch(/100\.000 cobrados/);
+      expect(m.anularConservandoCabecera).not.toHaveBeenCalled();
+    });
+    it('🔴 si el reporte tampoco la encuentra: frena (no se adivina)', async () => {
+      m.comprobantesPendientesCliente.mockResolvedValue([]);
+      m.pagadoDeFactura.mockResolvedValue(null);
+      const r = await llamar(cambio);
+      expect(r.status).toBe(409);
+      expect(m.anularConservandoCabecera).not.toHaveBeenCalled();
+    });
   });
 
   it('con notas de crédito o débito encima, se sigue corrigiendo con notas', async () => {

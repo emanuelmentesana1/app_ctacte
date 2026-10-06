@@ -1896,6 +1896,39 @@ async function leerPendientesCliente(
   return parsearPendientesCliente(data);
 }
 
+/**
+ * 🔴 06/10/2026 — CUÁNTO SE PAGÓ DE UNA FACTURA, cuando no figura entre los pendientes.
+ *
+ * FA B 51277 (MEDINA DORA): facturada con fecha de MAÑANA, el reporte de pendientes no la trae
+ * —ninguna factura con fecha futura aparece ahí, verificado con tres de otros clientes— y "Editar"
+ * y "Anular" decían "$336.254 cobrados" sin un solo recibo. `/reportes/facturas` sí la trae, con lo
+ * imputado (`rc_imp_pagado`) y el saldo (`saldo_fa`): ahí decía pagado $0.
+ *
+ * `null` = no la encontré: quien llama NO puede concluir que no tiene pagos.
+ */
+export function pagoSegunReporte(filas: any[], idFactura: string): { pagado: number; saldo: number } | null {
+  const fila = filas.find(f => String(f?.fa_id ?? '') === String(idFactura));
+  if (!fila) return null;
+  const pagado = Number(fila.rc_imp_pagado), saldo = Number(fila.saldo_fa);
+  return Number.isFinite(pagado) && Number.isFinite(saldo) ? { pagado, saldo } : null;
+}
+export async function pagadoDeFactura(idFactura: string, fecha: string, codEmpresa = 1): Promise<{ pagado: number; saldo: number } | null> {
+  const dia = String(fecha ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) return null;
+  const cli = await imClient();
+  // Casa Central factura en cuenta corriente (tag S); el contado (N) por las dudas.
+  for (const tag of ['S', 'N']) {
+    const { data } = await imGetRetry(
+      () => cli.get('/reportes/facturas', { params: { codEmpresa, tag, fechaDesde: dia, fechaHasta: dia, limit: 5000 } }),
+      `reportes/facturas ${dia} ${tag}`,
+    );
+    const filas = data?.results ?? data?.items ?? (Array.isArray(data) ? data : []);
+    const r = pagoSegunReporte(filas, idFactura);
+    if (r) return r;
+  }
+  return null;
+}
+
 export async function getDisponibleCliente(codCliente: number): Promise<DisponibleCliente | null> {
   const cli = await imClient();
   const { data } = await imGetRetry(
