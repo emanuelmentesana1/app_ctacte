@@ -1788,8 +1788,8 @@ function EditarReciboForm({ rec, clients, onSaved, onCancel }: {
     };
     /**
      * Un recibo ya emitido (Mati, 06/10/2026, MONTENORT): lo que cambia en IM no se guarda sólo acá. El medio (la cuenta)
-     * se corrige en IM con el mismo número, después de confirmar; monto, cliente y fecha todavía van a mano en IM.
-     * Los textos se guardan acá, como siempre.
+     * se corrige en IM con el mismo número; monto, cliente o fecha: se anula en IM y se emite uno nuevo. Siempre después
+     * de confirmar. Los textos se guardan acá, como siempre.
      */
     const guardarEmitido = async (montoNum: number) => {
         const cambiosIM: Record<string, unknown> = {};
@@ -1798,19 +1798,22 @@ function EditarReciboForm({ rec, clients, onSaved, onCancel }: {
         if ((fecha || null) !== (rec.fecha_comprobante ?? null)) cambiosIM.fecha_comprobante = fecha;
         if (medio !== normalizeMedioUI(rec.medio_pago)) cambiosIM.medio_pago = medio;
         let enIM = false;
+        let nuevoRC: string | null = null;
         if (Object.keys(cambiosIM).length) {
             const plan = await postear('/corregir', { accion: 'plan', cambios: cambiosIM });
             if (!plan.ok) { setMsg({ kind: 'err', text: plan.d.error || 'No se pudo revisar el recibo en IM' }); return; }
             const p = plan.d.plan;
             if (p.tipo === 'no_se_puede') { setMsg({ kind: 'err', text: p.motivo }); return; }
             if (p.tipo === 'anular_reemitir') {
-                setMsg({ kind: 'err', text: 'Cambiar el monto, el cliente o la fecha de un recibo ya emitido todavía se corrige a mano en IM: anulalo allá y cargalo de nuevo.' });
-                return;
+                const n = p.nuevo;
+                const cliente = clients.find(c => c.cod === String(n.cod_cliente))?.name ?? `cliente ${n.cod_cliente}`;
+                if (!window.confirm(`En InfoManager se ANULA el recibo ${plan.d.recibo_im ?? ''} y se emite uno NUEVO (cambia el número):\n\n· ${cliente}\n· ${formatMoney(n.monto)}\n· fecha ${n.fecha}\n· cuenta ${n.cuenta}\n· primero a las mismas facturas que pagaba el anulado\n\nQueda registrado quién lo corrigió. ¿Anular y emitir el nuevo?`)) return;
             }
             if (p.tipo === 'cuenta' && !window.confirm(`En InfoManager, el recibo ${plan.d.recibo_im ?? ''} pasa de ${etiquetaMedio(normalizeMedioUI(rec.medio_pago))} (cuenta ${p.desde}) a ${etiquetaMedio(medio)} (cuenta ${p.hacia}).\n\nConserva el número, el importe y las facturas. Queda registrado quién lo corrigió.\n\n¿Corregir en IM?`)) return;
             const hecho = await postear('/corregir', { accion: 'corregir', cambios: cambiosIM });
             if (!hecho.ok) { setMsg({ kind: 'err', text: hecho.d.error || 'No se pudo corregir en IM' }); return; }
-            enIM = p.tipo === 'cuenta';
+            enIM = p.tipo === 'cuenta' || p.tipo === 'anular_reemitir';
+            if (p.tipo === 'anular_reemitir') nuevoRC = hecho.d.nuevo?.numero ?? null;
         }
         const textos: Record<string, string | null> = {};
         if ((bancoOrigen || null) !== (rec.banco_origen ?? null)) textos.banco_origen = bancoOrigen || null;
@@ -1820,7 +1823,7 @@ function EditarReciboForm({ rec, clients, onSaved, onCancel }: {
             const t = await postear('/editar', textos);
             if (!t.ok) { setMsg({ kind: 'err', text: t.d.error || 'No se pudieron guardar los cambios' }); return; }
         }
-        setMsg({ kind: 'ok', text: enIM ? 'Corregido en IM y en la app' : 'Cambios guardados' });
+        setMsg({ kind: 'ok', text: !enIM ? 'Cambios guardados' : nuevoRC ? `Corregido en IM: se anuló el RC ${numeroIM ?? ''} y se emitió el RC ${nuevoRC}` : 'Corregido en IM y en la app' });
         setTimeout(onSaved, enIM ? 1500 : 700);
     };
 
@@ -1861,9 +1864,9 @@ function EditarReciboForm({ rec, clients, onSaved, onCancel }: {
                 <div className="rec-msg rec-msg--err">
                     <AlertCircle size={16} />
                     <span>
-                        Este recibo ya está en InfoManager{numeroIM ? ` (RC ${numeroIM})` : ''}. Si cambiás el medio de
-                        pago, al guardar se va a corregir en IM también, con el mismo número y después de confirmar.
-                        El monto, el cliente y la fecha todavía se corrigen a mano en IM.
+                        Este recibo ya está en InfoManager{numeroIM ? ` (RC ${numeroIM})` : ''}. Al guardar, el cambio se
+                        va a corregir en IM también, después de confirmar: el medio de pago, con el mismo número; el
+                        monto, el cliente o la fecha, anulando el recibo y emitiendo uno nuevo.
                     </span>
                 </div>
             )}

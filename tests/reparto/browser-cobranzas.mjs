@@ -247,7 +247,9 @@ try {
     const { page, ctx } = await abrir(anto, { recibos: [emitido], alCorregir: body => {
       pedidos.push(body);
       const c = body.cambios ?? {};
-      if (c.monto !== undefined || c.cod_cliente !== undefined || c.fecha_comprobante !== undefined) return { ok: true, plan: { tipo: 'anular_reemitir', motivos: ['cambia el monto'] }, recibo_im: '30156202' };
+      if (c.monto !== undefined || c.cod_cliente !== undefined || c.fecha_comprobante !== undefined) {
+        return { ok: true, plan: { tipo: 'anular_reemitir', motivos: ['cambia el monto'], nuevo: { cod_cliente: 722, monto: c.monto, fecha: '2026-10-02', cuenta: '1120003', medio: 'mercadopago', facturas: [{ id: '58997783', importe: c.monto }] } }, recibo_im: '30156202' };
+      }
       return { ok: true, plan: { tipo: 'cuenta', desde: '1120003', hacia: '1120005' }, recibo_im: '30156202' };
     } });
     const dialogos = [];
@@ -262,18 +264,20 @@ try {
       assert(/corregir en IM/i.test(await form.innerText()), 'No explica que el cambio va también a IM');
       const monto = form.locator('label.rec-field', { hasText: 'Monto' }).locator('input');
       const medio = form.locator('label.rec-field', { hasText: 'Medio' }).locator('select');
-      // El monto todavía se corrige a mano en IM: lo dice, no pregunta nada y no corrige.
+      // El monto: se anula y se emite uno nuevo. La confirmación lo dice; si no se confirma, no se corrige nada.
       await monto.fill('418769');
       await form.locator('button', { hasText: 'Guardar cambios' }).click();
-      await form.getByText('anulalo allá y cargalo de nuevo', { exact: false }).waitFor();
-      assert(!dialogos.length && !pedidos.some(p => p.accion === 'corregir'), `Con el monto preguntó o corrigió: ${JSON.stringify({ dialogos, pedidos })}`);
+      for (let i = 0; i < 40 && !dialogos.length; i++) await page.waitForTimeout(100);
+      assert(dialogos.length === 1 && /ANULA/.test(dialogos[0]) && /30156202/.test(dialogos[0]) && /418\.769/.test(dialogos[0]), `La confirmación de anular no dice qué pasa: ${JSON.stringify(dialogos)}`);
+      await page.waitForTimeout(300);
+      assert(!pedidos.some(p => p.accion === 'corregir'), `Corrigió sin confirmar: ${JSON.stringify(pedidos)}`);
       await monto.fill('418719');
       // El medio (la cuenta): se confirma y se corrige en IM.
       await medio.selectOption('recaudadora_1');
       aceptar = true;
       await form.locator('button', { hasText: 'Guardar cambios' }).click();
       await page.getByText('Corregido en IM', { exact: false }).first().waitFor();
-      assert(dialogos.length === 1 && /30156202/.test(dialogos[0]) && /1120005/.test(dialogos[0]), `La confirmación no dice qué pasa en IM: ${JSON.stringify(dialogos)}`);
+      assert(dialogos.length === 2 && /30156202/.test(dialogos[1]) && /1120005/.test(dialogos[1]), `La confirmación no dice qué pasa en IM: ${JSON.stringify(dialogos)}`);
       const ultimo = pedidos.at(-1);
       assert(ultimo?.accion === 'corregir' && JSON.stringify(ultimo.cambios) === JSON.stringify({ medio_pago: 'recaudadora_1' }), `No pidió la corrección justa: ${JSON.stringify(ultimo)}`);
     } finally { await ctx.close(); }

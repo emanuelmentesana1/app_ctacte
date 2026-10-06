@@ -73,4 +73,6 @@ export const im5 = {
     comprobante: (id: string) => pedir<DetalleReciboIM5>('GET', `/api/comprobantes/${encodeURIComponent(id)}`),
     /** Graba la edición de un recibo (mismo número). El cuerpo lo arma `cuerpoEdicionRecibo`. */
     editarRecibo: (id: string, cuerpo: unknown) => pedir<{ success: boolean; id?: number }>('PUT', `/api/comprobantes/recibo/${encodeURIComponent(id)}`, cuerpo),
+    /** Anula un comprobante (lo que hace el botón «Anular» de la pantalla). Un recibo anulado devuelve la deuda. */
+    anular: (id: string) => pedir<{ success: boolean; id?: number }>('POST', `/api/comprobantes/${encodeURIComponent(id)}/anular`),
 };

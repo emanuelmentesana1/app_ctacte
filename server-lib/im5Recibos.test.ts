@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cuerpoEdicionRecibo, planCorreccion, type DetalleReciboIM5 } from './im5Recibos.js';
+import { cuerpoEdicionRecibo, planCorreccion, imputacionReemision, pendientesTrasAnular, type DetalleReciboIM5 } from './im5Recibos.js';
 
 /**
  * Corregir en IM un recibo que la app ya emitió (Mati, 06/10/2026, caso MONTENORT). Datos inventados con la forma
@@ -91,5 +91,42 @@ describe('planCorreccion — qué se hace en IM y qué no', () => {
 
     it('$1 de diferencia con IM es el truncado de siempre: no frena', () => {
         expect(planCorreccion({ ...app, monto: 49.8 }, { medio_pago: 'recaudadora_1' }, detalle(), '1120005')).toMatchObject({ tipo: 'cuenta' });
+    });
+});
+
+describe('imputacionReemision — a qué facturas va el recibo nuevo (anular y reemitir)', () => {
+    const deuda = [
+        { id: 'VIEJA', saldo: 50_000, fecha: '2026-08-01' },
+        { id: 'FA1', saldo: 300_000, fecha: '2026-09-20' },
+        { id: 'FA2', saldo: 120_000, fecha: '2026-09-25' },
+        { id: 'RESIDUO', saldo: 0.6, fecha: '2026-07-01' },
+    ];
+
+    it('🔑 mismo monto: va a las mismas facturas que el anulado, aunque haya deuda más vieja', () => {
+        expect(imputacionReemision(300_000, ['FA1'], deuda)).toEqual([{ id: 'FA1', importe: 300_000 }]);
+    });
+
+    it('más plata: primero las del anulado, el resto a la deuda más vieja (un residuo de $1 o menos no cuenta)', () => {
+        expect(imputacionReemision(400_000, ['FA1'], deuda)).toEqual([{ id: 'FA1', importe: 300_000 }, { id: 'VIEJA', importe: 50_000 }, { id: 'FA2', importe: 50_000 }]);
+    });
+
+    it('menos plata: sólo a las del anulado, en su orden', () => {
+        expect(imputacionReemision(100_000, ['FA2', 'FA1'], deuda)).toEqual([{ id: 'FA2', importe: 100_000 }]);
+    });
+
+    it('otro cliente (sin facturas del anulado): la deuda más vieja primero', () => {
+        expect(imputacionReemision(60_000, [], deuda)).toEqual([{ id: 'VIEJA', importe: 50_000 }, { id: 'FA1', importe: 10_000 }]);
+    });
+
+    it('🔴 más plata que toda la deuda: no se emite (sería anticipo, la API de IM no lo hace)', () => {
+        expect(imputacionReemision(500_000, ['FA1'], deuda)).toMatchObject({ error: expect.stringMatching(/anticipo/i) });
+        expect(imputacionReemision(10, [], [])).toMatchObject({ error: expect.stringMatching(/anticipo/i) });
+    });
+});
+
+describe('pendientesTrasAnular — la deuda del cliente cuando se anule el recibo', () => {
+    it('lo que pagaba el anulado vuelve a estar pendiente (y aparece si ya no figuraba)', () => {
+        expect(pendientesTrasAnular([{ id: 'FA1', saldo: 0.3, fecha: '2026-09-30' }, { id: 'FA2', saldo: 10, fecha: null }], [{ id: 'FA1', importe: 418_719 }, { id: 'FA9', importe: 5 }]))
+            .toEqual([{ id: 'FA1', saldo: 418_719.3, fecha: '2026-09-30' }, { id: 'FA2', saldo: 10, fecha: null }, { id: 'FA9', saldo: 5, fecha: null }]);
     });
 });

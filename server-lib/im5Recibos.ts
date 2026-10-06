@@ -166,3 +166,47 @@ export function planCorreccion(app: ReciboEnLaApp, cambios: CambiosRecibo, im: D
     if (pagos[0].cond_pago === 'CH' || pagos[0].cond_pago === 'TJ') return { tipo: 'no_se_puede', motivo: 'Es un cheque o una tarjeta: corregilo a mano en IM.' };
     return { tipo: 'cuenta', desde: String(cuentaActual), hacia: String(cuentaNueva) };
 }
+
+/** Una factura pendiente del cliente, como la usa la reemisión. */
+export interface FacturaDeuda { id: string; saldo: number; fecha?: string | null }
+
+const centavos = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * La deuda del cliente como va a quedar cuando se anule el recibo: lo que el anulado pagaba vuelve a estar pendiente
+ * (sumado a lo que la factura ya debía, o como factura nueva si ya no figuraba). Sirve para la vista previa: al corregir,
+ * la reemisión usa la deuda que devuelve IM después de anular.
+ */
+export function pendientesTrasAnular(pendientes: FacturaDeuda[], pagaba: Array<{ id: string; importe: number }>): FacturaDeuda[] {
+    const salida = pendientes.map(p => ({ ...p }));
+    for (const x of pagaba) {
+        const f = salida.find(p => p.id === x.id);
+        if (f) f.saldo = centavos(f.saldo + x.importe);
+        else salida.push({ id: x.id, saldo: centavos(x.importe), fecha: null });
+    }
+    return salida;
+}
+
+/**
+ * A qué facturas va el recibo nuevo de una corrección (anular y reemitir): primero las mismas que pagaba el anulado y en
+ * su orden; lo que sobre, a la deuda más vieja del cliente. Un residuo de $1 o menos no cuenta (IM imputa pesos enteros).
+ * Si sobra plata, sería un anticipo (la API de IM no lo hace) y no se emite.
+ */
+export function imputacionReemision(monto: number, originales: string[], pendientes: FacturaDeuda[]): Array<{ id: string; importe: number }> | { error: string } {
+    const deuda = pendientes.filter(p => Number(p.saldo) > 1);
+    const vieja = (a: FacturaDeuda, b: FacturaDeuda) => (a.fecha ?? '9999') < (b.fecha ?? '9999') ? -1 : (a.fecha ?? '9999') > (b.fecha ?? '9999') ? 1 : 0;
+    const orden = [
+        ...originales.map(id => deuda.find(p => p.id === id)).filter((p): p is FacturaDeuda => !!p),
+        ...deuda.filter(p => !originales.includes(p.id)).sort(vieja),
+    ];
+    let resto = centavos(monto);
+    const salida: Array<{ id: string; importe: number }> = [];
+    for (const f of orden) {
+        if (resto <= 0) break;
+        const importe = centavos(Math.min(resto, Number(f.saldo)));
+        salida.push({ id: f.id, importe });
+        resto = centavos(resto - importe);
+    }
+    if (resto > 1) return { error: `Paga $${resto.toFixed(2)} más que toda la deuda pendiente del cliente: sería un anticipo y la API de IM no lo hace. Cargalo a mano en IM.` };
+    return salida;
+}
