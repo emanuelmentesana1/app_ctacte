@@ -38,9 +38,10 @@ const EMPRESA = 1;
 /**
  * 🔴 Piloto (Mati, 05/10/2026: "sí al piloto" con una hoja). La emisión se prende SÓLO para estas hojas, y
  * cada una se rinde en la app y NO a mano en IM. `RENDICION_PILOTO_HOJAS`: números separados por coma
- * (vacío = ninguna). La primera: la 3449 (VICTOR, 05/10), que Anto rinde el 06/10.
+ * (vacío = ninguna). La primera: la 3449 (VICTOR, 05/10), que Anto rindió el 06/10. El 06/10 Mati sumó
+ * las tres de ese día (3451 y 3452 de NIÑO, 3453 de VICTOR): "para ir ajustando y dejar el circuito funcionando".
  */
-const hojasPiloto = () => String(process.env.RENDICION_PILOTO_HOJAS ?? '3449').split(',')
+const hojasPiloto = () => String(process.env.RENDICION_PILOTO_HOJAS ?? '3449,3451,3452,3453').split(',')
     .map(x => Number(x.trim())).filter(n => Number.isInteger(n) && n > 0);
 /** Recibos por tanda en una hoja del piloto; 0 fuera del piloto (sólo vista previa). */
 const tope = (numeroHoja: number) => (hojasPiloto().includes(numeroHoja) ? Math.max(0, Number(process.env.RENDICION_TOPE ?? 30) || 0) : 0);
