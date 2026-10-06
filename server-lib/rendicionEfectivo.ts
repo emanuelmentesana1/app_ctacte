@@ -114,6 +114,8 @@ export interface PasoEmision {
     elegida?: boolean;
     /** Las facturas pendientes del cliente (la más vieja primero), para poder elegir en la vista previa. */
     pendientes?: Array<{ id: string; etiqueta: string; fecha: string | null; saldo: number }>;
+    /** Quién revisó el posible repetido y decidió emitirlo igual. */
+    revisado?: LineaEfectivo['revisado'];
 }
 
 /** Hasta $5 lo absorbe el ajuste de IM (trunca a entero), igual que la pantalla de aprobación. */
@@ -203,14 +205,16 @@ export function planDeEmision(e: EntradaPlan): PasoEmision[] {
         const facturasDe = (id: string) => [...String(e.enApp.find(r => r.id === id)?.factura_asociada ?? '').matchAll(/#([^·,#]+)·/g)].map(m => m[1]);
         const enApp = dup.app.find(a => a.dias === 0 && (facturasDe(a.id).length === 0 || facturasDe(a.id).some(f => destino.has(f))));
         const enIM = dup.im.find(x => x.dias === 0);
-        if (enApp || enIM) {
+        // «Emitir igual, lo revisé»: una persona lo miró y decidió emitirlo. Saltea SÓLO este control, y por ese importe.
+        const revisado = l.revisado && Math.abs(Number(l.revisado.importe) - l.importe) < 0.01 ? l.revisado : null;
+        if (!revisado && (enApp || enIM)) {
             const d = enIM ? `recibo ${enIM.numero ?? enIM.id_recibo} del mismo día` : 'un pago cargado en la app del mismo día';
             return salteado(`Puede estar repetido: hay ${d} por un importe parecido${enApp && facturasDe(enApp.id).length ? ' y a la misma factura' : ''}. Revisalo antes de emitir.`, conPendientes);
         }
         if (listos >= e.tope) return { ...base, estado: 'en_espera', motivo: `Tope del piloto: ${e.tope} por tanda.`, recibo_app_id: previo?.id ?? null, ...conPendientes };
         listos += 1;
         return {
-            ...base, estado: 'listo', recibo_app_id: previo?.id ?? null, ...conPendientes,
+            ...base, estado: 'listo', recibo_app_id: previo?.id ?? null, ...conPendientes, ...(revisado ? { revisado } : {}),
             comprobantes: elegidas.map(([id, importe_a_pagar]) => {
                 const f = pendientes.find(x => String(x.id) === id);
                 return { id, importe_a_pagar, etiqueta: etiqueta(f, id), fecha: f?.fecha_factura ?? null };

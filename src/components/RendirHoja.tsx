@@ -40,6 +40,8 @@ interface Paso {
     /** true = va a las facturas que eligió quien rinde; false = la más vieja primero. */
     elegida?: boolean;
     pendientes?: { id: string; etiqueta: string; fecha: string | null; saldo: number }[];
+    /** Alguien revisó el posible repetido y decidió emitirlo igual (Mati, 06/10/2026). */
+    revisado?: { nombre: string | null; at: string };
 }
 type Eleccion = Array<{ id: string; importe: number }>;
 /** Hasta $5 lo absorbe el ajuste de IM (igual que el servidor). */
@@ -117,8 +119,10 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
     const cuentas = cuentasDeLaRendicion({ efectivo: lineas, gastos: gastosLeidos, efectivo_contado: contadoLeido });
 
     const r = detalle?.rendicion ?? null;
+    // La marca de «Emitir igual, lo revisé» la pone el servidor: no es un cambio sin guardar.
+    const guardadas = (r?.efectivo ?? []).map(l => (l.facturas?.length ? { cod_cliente: l.cod_cliente, importe: l.importe, facturas: l.facturas } : { cod_cliente: l.cod_cliente, importe: l.importe }));
     const sinGuardar = JSON.stringify({ e: lineas, g: gastosLeidos, c: contadoLeido })
-        !== JSON.stringify({ e: r?.efectivo ?? [], g: r?.gastos ?? [], c: r?.efectivo_contado ?? null });
+        !== JSON.stringify({ e: guardadas, g: r?.gastos ?? [], c: r?.efectivo_contado ?? null });
 
     async function pedir(metodo: 'PUT' | 'POST', ruta: string, cuerpo: unknown) {
         const resp = await fetch(`/api/rendiciones/hoja/${h.id}${ruta}`, {
@@ -154,6 +158,16 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
             const d = await pedir('POST', '/emitir', { accion: 'emitir' });
             setResultados({ lista: d.resultados ?? [], frenado: !!d.frenado }); setPlan(null);
             aplicar(await leer());
+        });
+    };
+    // «Emitir igual, lo revisé» (Mati, 06/10/2026): sólo para lo que la vista previa frenó como posible repetido.
+    const emitirIgual = (p: Paso) => {
+        if (!window.confirm(`¿Emitir igual el recibo de ${nombre(p.cod_cliente)} por ${money(p.importe)}?\n\n${p.motivo ?? ''}\n\nQueda registrado que lo revisaste vos. Se emite cuando aprietes «Emitir».`)) return;
+        correr(async () => {
+            const d: Detalle = await pedir('POST', '/revisado', { cod_cliente: p.cod_cliente });
+            aplicar(d); avisarArriba(d);
+            const v = await pedir('POST', '/emitir', { accion: 'plan' });
+            setPlan(v.plan); setResultados(null);
         });
     };
     const controlar = () => correr(async () => {
@@ -299,10 +313,13 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
                         <div key={p.cod_cliente} className={`rr-paso ${p.estado}`}>
                             <span className="rr-paso-cliente">{nombre(p.cod_cliente)} · {money(p.importe)}</span>
                             <span>
-                                {p.estado === 'listo' && `→ ${(p.comprobantes ?? []).map(c => `${c.etiqueta || c.id}${c.fecha ? ` del ${ddmm(c.fecha)}` : ''} ${money(c.importe_a_pagar)}`).join(' · ')}${p.elegida ? ' (elegidas)' : ''}`}
+                                {p.estado === 'listo' && `→ ${(p.comprobantes ?? []).map(c => `${c.etiqueta || c.id}${c.fecha ? ` del ${ddmm(c.fecha)}` : ''} ${money(c.importe_a_pagar)}`).join(' · ')}${p.elegida ? ' (elegidas)' : ''}${p.revisado ? ` · revisado por ${p.revisado.nombre ?? 'otra persona'}` : ''}`}
                                 {p.estado === 'emitido' && `✓ ya emitido (recibo ${p.recibo_im ?? ''})`}
                                 {(p.estado === 'salteado' || p.estado === 'en_espera') && p.motivo}
                             </span>
+                            {p.estado === 'salteado' && p.motivo?.startsWith('Puede estar repetido') && (
+                                <button type="button" className="rd-btn ghost rr-revisado" disabled={ocupado} onClick={() => emitirIgual(p)}>Emitir igual, lo revisé</button>
+                            )}
                             {p.estado !== 'emitido' && !!p.pendientes?.length && eligiendo !== p.cod_cliente && (
                                 <button type="button" className="rd-btn ghost rr-elegir" disabled={ocupado} onClick={() => setEligiendo(p.cod_cliente)}>Elegir facturas</button>
                             )}

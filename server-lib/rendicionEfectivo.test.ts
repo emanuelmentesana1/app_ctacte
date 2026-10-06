@@ -162,6 +162,26 @@ describe('planDeEmision — qué recibos emite la app y cuáles no', () => {
             expect(p.estado).toBe('salteado');
         });
 
+        it('🔑 «Emitir igual, lo revisé» (Mati, 06/10): con la marca, el posible repetido se emite y el paso dice quién lo revisó', () => {
+            const revisado = { por: 'u-anto', nombre: 'Anto', at: '2026-10-06T16:00:00Z', importe: 412_300 };
+            const [p] = planDeEmision({ ...base, efectivo: [{ cod_cliente: 722, importe: 412_300, revisado }], enApp: [reciboApp({ factura_asociada: '#FA2·$412000.00' })] });
+            expect(p.estado).toBe('listo');
+            expect(p.revisado).toEqual(revisado);
+        });
+
+        it('si después cambió el importe, la marca ya no vale', () => {
+            const revisado = { por: 'u-anto', nombre: 'Anto', at: '2026-10-06T16:00:00Z', importe: 400_000 };
+            const [p] = planDeEmision({ ...base, efectivo: [{ cod_cliente: 722, importe: 412_300, revisado }], enApp: [reciboApp({ factura_asociada: '#FA2·$412000.00' })] });
+            expect(p.estado).toBe('salteado');
+        });
+
+        it('🔴 la marca NO saltea «ya cargado a mano en Caja Repartos»: eso sí es el mismo efectivo', () => {
+            const revisado = { por: 'u-anto', nombre: 'Anto', at: '2026-10-06T16:00:00Z', importe: 412_300 };
+            const [p] = planDeEmision({ ...base, efectivo: [{ cod_cliente: 722, importe: 412_300, revisado }], enIM: [reciboIM({ importe: 412_300 })] });
+            expect(p.estado).toBe('salteado');
+            expect(p.motivo).toMatch(/a mano/i);
+        });
+
         it('un recibo de IM parecido de otro día (no de Caja Repartos) no frena', () => {
             const [p] = planDeEmision({ ...base, enIM: [reciboIM({ cuenta: '1120003', importe: 412_300, fecha: '2026-10-08' })] });
             expect(p.estado).toBe('listo');

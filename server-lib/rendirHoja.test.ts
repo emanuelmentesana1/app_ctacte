@@ -73,7 +73,7 @@ vi.mock('./infomanager.js', () => ({
 vi.mock('./imApiV2.js', () => ({ getV2: m.getV2, imV2Configurada: () => true }));
 vi.mock('./recibos.js', () => ({ aprobarRecibo: m.aprobar, CAJA_DEL_SERVIDOR: Symbol.for('cajaDelServidor') }));
 
-const { rendicionDeHoja, guardarRendicion, controlarRendicion, emitirRendicion, saldosDelMes } = await import('./rendirHoja.js');
+const { rendicionDeHoja, guardarRendicion, controlarRendicion, emitirRendicion, saldosDelMes, marcarRevisado } = await import('./rendirHoja.js');
 const CAJA = Symbol.for('cajaDelServidor');
 
 const HOJA = '11111111-2222-3333-4444-555555555555';
@@ -309,5 +309,42 @@ describe('elegir la factura (Mati, 06/10/2026)', () => {
     const g = await guardar(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA2', importe: 412_300 }] }], efectivo_contado: 412_300, version: 1 });
     expect(g.statusCode).toBe(200);
     expect(m.tablas.rendiciones[0].controlado_por).toBe('u-maca');
+  });
+});
+
+
+describe('«Emitir igual, lo revisé» (Mati, 06/10/2026)', () => {
+  const revisar = async (user: any, body: Record<string, unknown>) => { const r = res(); await marcarRevisado(req(user, body), r); return r; };
+
+  it('🔑 la marca la pone el servidor: quién (el de la sesión), cuándo y por qué importe', async () => {
+    await guardar(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300 }] });
+    const r = await revisar(ANTO, { cod_cliente: 722 });
+    expect(r.statusCode).toBe(200);
+    const linea = m.tablas.rendiciones[0].efectivo[0];
+    expect(linea.revisado).toMatchObject({ por: 'u-anto', nombre: 'Anto', importe: 412_300 });
+    expect(typeof linea.revisado.at).toBe('string');
+    expect(r.body.rendicion.efectivo[0].revisado).toMatchObject({ nombre: 'Anto' });
+  });
+
+  it('🔴 el navegador no puede mandarla: si viene en lo que se guarda, se descarta', async () => {
+    const g = await guardar(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300, revisado: { por: 'u-otro', nombre: 'Otro', at: 'x', importe: 412_300 } }] });
+    expect(g.statusCode).toBe(200);
+    expect(m.tablas.rendiciones[0].efectivo[0].revisado).toBeUndefined();
+  });
+
+  it('al guardar, la marca sigue si el importe no cambió; si cambió, se cae', async () => {
+    await guardar(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300 }] });
+    await revisar(ANTO, { cod_cliente: 722 });
+    const v = m.tablas.rendiciones[0].version;
+    await guardar(ANTO, { version: v, efectivo: [{ cod_cliente: 722, importe: 412_300 }], efectivo_contado: 412_300 });
+    expect(m.tablas.rendiciones[0].efectivo[0].revisado).toMatchObject({ por: 'u-anto' });
+    await guardar(ANTO, { version: v + 1, efectivo: [{ cod_cliente: 722, importe: 400_000 }], efectivo_contado: 412_300 });
+    expect(m.tablas.rendiciones[0].efectivo[0].revisado).toBeUndefined();
+  });
+
+  it('un cliente sin efectivo cargado no se marca; un vendedor no puede marcar', async () => {
+    await guardar(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300 }] });
+    expect((await revisar(ANTO, { cod_cliente: 815 })).statusCode).toBe(404);
+    expect((await revisar({ ...ANTO, rol: 'vendedor' }, { cod_cliente: 722 })).statusCode).toBe(403);
   });
 });

@@ -12,6 +12,11 @@ export interface LineaEfectivo {
     importe: number;
     /** A qué facturas va el recibo, si quien rinde la eligió (Mati, 06/10/2026). Sin esto: la más vieja primero. */
     facturas?: Array<{ id: string; importe: number }>;
+    /**
+     * «Emitir igual, lo revisé» (Mati, 06/10/2026): alguien revisó un posible repetido y decidió emitirlo. La pone sólo
+     * el servidor; vale para ese importe.
+     */
+    revisado?: { por: string; nombre: string | null; at: string; importe: number };
 }
 export interface GastoViaje { concepto: ConceptoGasto; importe: number; detalle: string | null }
 export interface Borrador {

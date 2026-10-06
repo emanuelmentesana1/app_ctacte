@@ -72,7 +72,7 @@ import { compararFacturaConRemito } from './server-lib/compararComprobantes.js';
 import { marcarRetiro, quitarRetiro, marcarRetirado, listarRetiros, resumenRetiros } from './server-lib/retirosSucursal.js';
 import { listarChoferes, liquidacionMensual } from './server-lib/liquidacionChoferes.js';
 import { rendicionesDelRango, resumenDeHoja } from './server-lib/rendiciones.js';
-import { rendicionDeHoja, guardarRendicion, controlarRendicion, emitirRendicion, saldosDelMes } from './server-lib/rendirHoja.js';
+import { rendicionDeHoja, guardarRendicion, controlarRendicion, emitirRendicion, saldosDelMes, marcarRevisado } from './server-lib/rendirHoja.js';
 import { listarAjustes, crearAjuste, borrarAjuste, candidatasAVincular, vincularAjuste } from './server-lib/ajustesEntrega.js';
 import { anularPresupuesto } from './server-lib/anularPresupuesto.js';
 import { listarPresupuestos, revisarPresupuesto, borrarRevision, detallePresupuesto, corregirCantidades, fraccionadoDelRango, consolidadoDelRango } from './server-lib/panelPresupuestos.js';
@@ -724,6 +724,8 @@ app.get('/api/rendiciones/hoja/:id', requireJwt, (req: any, res) => rendicionDeH
 app.put('/api/rendiciones/hoja/:id', requireJwt, (req: any, res) => guardarRendicion(req, res));
 app.post('/api/rendiciones/hoja/:id/controlar', requireJwt, (req: any, res) => controlarRendicion(req, res));
 app.post('/api/rendiciones/hoja/:id/emitir', requireJwt, (req: any, res) => emitirRendicion(req, res));
+// «Emitir igual, lo revisé»: libera un posible repetido que la vista previa frenó (Mati, 06/10/2026).
+app.post('/api/rendiciones/hoja/:id/revisado', requireJwt, (req: any, res) => marcarRevisado(req, res));
 // Todo lo de una hoja para imprimirla con los recibos y para cerrarla (Mati, 06/10/2026). Sólo lectura.
 app.get('/api/rendiciones/hoja/:id/resumen', requireJwt, (req: any, res) => resumenDeHoja(req, res));
 

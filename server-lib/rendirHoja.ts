@@ -105,9 +105,11 @@ async function recibosDeLaHoja(hojaId: string): Promise<ReciboDeLaHoja[]> {
 /** Lo que cuenta para el control de lo contado: cliente e importe (la factura elegida no cambia la plata). */
 const plata = (l: LineaEfectivo) => [l.cod_cliente, l.importe];
 const aBorrador = (r: FilaRendicion): Borrador => ({
-    efectivo: (r.efectivo ?? []).map(l => (l.facturas?.length
-        ? { cod_cliente: Number(l.cod_cliente), importe: Number(l.importe), facturas: l.facturas.map(f => ({ id: String(f.id), importe: Number(f.importe) })) }
-        : { cod_cliente: Number(l.cod_cliente), importe: Number(l.importe) })),
+    efectivo: (r.efectivo ?? []).map(l => ({
+        cod_cliente: Number(l.cod_cliente), importe: Number(l.importe),
+        ...(l.facturas?.length ? { facturas: l.facturas.map(f => ({ id: String(f.id), importe: Number(f.importe) })) } : {}),
+        ...(l.revisado ? { revisado: l.revisado } : {}),
+    })),
     gastos: (r.gastos ?? []).map(g => ({ concepto: g.concepto, importe: Number(g.importe), detalle: g.detalle ?? null })),
     efectivo_contado: r.efectivo_contado == null ? null : Number(r.efectivo_contado),
     observaciones: r.observaciones ?? null,
@@ -177,6 +179,10 @@ export async function guardarRendicion(req: Request & { user?: JwtPayload }, res
 
         const actual = await leerRendicion(hoja.id);
         const antes = actual ? aBorrador(actual) : null;
+        // La marca de «Emitir igual, lo revisé» la pone sólo el servidor (marcarRevisado). Lo que mande el navegador se
+        // descartó al normalizar; acá se conserva la guardada si el importe de ese cliente no cambió.
+        const marcas = new Map((antes?.efectivo ?? []).filter(l => l.revisado).map(l => [l.cod_cliente, l.revisado!]));
+        b.efectivo = b.efectivo.map(l => { const r = marcas.get(l.cod_cliente); return r && Math.abs(r.importe - l.importe) < 0.01 ? { ...l, revisado: r } : l; });
         const cambioContado = (antes?.efectivo_contado ?? null) !== b.efectivo_contado;
         const cambioCuenta = !antes || cambioContado
             || JSON.stringify(antes.efectivo.map(plata)) !== JSON.stringify(b.efectivo.map(plata)) || JSON.stringify(antes.gastos) !== JSON.stringify(b.gastos);
@@ -277,9 +283,11 @@ async function emitirUno(user: JwtPayload, hoja: FilaHoja, paso: PasoEmision): P
     // Queda en 'error' mientras se emite, no en 'pendiente_revision': así no aparece en la cola de
     // Cobranzas de Anto (ni se aprueba ahí a otra caja) si algo corta a mitad de camino.
     const enCurso = `Emitiendo desde la rendición de la hoja ${hoja.numero}…`;
+    // Queda registrado en Cobranzas quién decidió emitir un posible repetido. A IM le llega lo de siempre.
+    const nota = `Rendición hoja ${hoja.numero}` + (paso.revisado ? ` · se emitió aunque parecía repetido: lo revisó ${paso.revisado.nombre ?? 'otra persona'}` : '');
     let id = paso.recibo_app_id ?? null;
     if (id) {
-        const r = await sb().from('comprobantes_pago').update({ monto: paso.importe, fecha_comprobante: hoja.fecha, status: 'error', error_msg: enCurso })
+        const r = await sb().from('comprobantes_pago').update({ monto: paso.importe, fecha_comprobante: hoja.fecha, status: 'error', error_msg: enCurso, ...(paso.revisado ? { observaciones: nota } : {}) })
             .eq('id', id).neq('status', 'imputado').select('id');
         if (r.error || !r.data?.length) return { ...base, ok: false, error: 'Ese recibo cambió mientras tanto: recargá la rendición.' };
     } else {
@@ -289,7 +297,7 @@ async function emitirUno(user: JwtPayload, hoja: FilaHoja, paso: PasoEmision): P
         const r = await sb().from('comprobantes_pago').insert({
             id, tenant_id: TENANT_ID, hoja_id: hoja.id, cod_cliente: paso.cod_cliente, cod_vendedor: await codVendedorDe(paso.cod_cliente),
             monto: paso.importe, fecha_comprobante: hoja.fecha, medio_pago: 'efectivo', mp_status: 'skipped',
-            observaciones: `Rendición hoja ${hoja.numero}`, foto_url: null,
+            observaciones: nota, foto_url: null,
             status: 'error', error_msg: enCurso, created_by: user.sub, created_at: new Date().toISOString(),
         });
         if (r.error) return { ...base, ok: false, error: r.error.code === '23505' ? 'Otra persona está emitiendo este recibo: recargá la rendición.' : `No pude registrar el cobro: ${r.error.message}` };
@@ -345,6 +353,33 @@ export async function emitirRendicion(req: Request & { user?: JwtPayload }, res:
         console.log(`[rendir] hoja ${hoja.numero}: ${user.sub} emitió ${resultados.filter(x => x.ok).length} de ${resultados.length}${frenado ? ' (frenado)' : ''}`);
         res.json({ ok: true, plan, resultados, frenado, tope: tope(hoja.numero) });
     } catch (e) { fallar(res, e, 'emitir'); }
+}
+
+/**
+ * POST /api/rendiciones/hoja/:id/revisado { cod_cliente } — «Emitir igual, lo revisé» (Mati, 06/10/2026). Para el
+ * recibo que la vista previa frenó por «puede estar repetido»: quien rinde lo revisó y decide emitirlo. La marca la
+ * pone el servidor (quién, cuándo, por qué importe), saltea sólo ese control y se cae si cambia el importe.
+ */
+export async function marcarRevisado(req: Request & { user?: JwtPayload }, res: Response) {
+    const user = req.user;
+    if (!user || !puedeRevisarRecibos(String(user.rol))) { res.status(403).json({ error: 'Requiere admin, gerente o administrativo' }); return; }
+    try {
+        const hoja = await leerHoja(String(req.params.id));
+        const actual = await leerRendicion(hoja.id);
+        if (!actual) throw new NoSePuede('Primero guardá lo cobrado por cliente.');
+        const cod = Number(req.body?.cod_cliente);
+        const lineas = actual.efectivo ?? [];
+        const i = lineas.findIndex(l => Number(l.cod_cliente) === cod);
+        if (i < 0) throw new NoSePuede('Ese cliente no tiene efectivo cargado en esta rendición.', 404);
+        const { data: u } = await sb().from('usuarios').select('nombre').eq('id', user.sub).maybeSingle();
+        const revisado = { por: user.sub, nombre: (u as { nombre?: string | null } | null)?.nombre ?? null, at: new Date().toISOString(), importe: Number(lineas[i].importe) };
+        const filas = revisar<FilaRendicion[]>(await sb().from('rendiciones')
+            .update({ efectivo: lineas.map((l, j) => (j === i ? { ...l, revisado } : l)), updated_by: user.sub, version: actual.version + 1 })
+            .eq('id', actual.id).eq('version', actual.version).select(), 'No pude marcar el recibo');
+        if (!filas?.length) throw new NoSePuede('Otra persona cambió esta rendición: recargá para ver lo último. No se marcó nada.');
+        console.log(`[rendir] hoja ${hoja.numero}: ${user.sub} revisó un posible repetido y lo libera: cliente ${cod}, $${revisado.importe}`);
+        res.json(await respuesta(user, hoja, filas[0], await recibosDeLaHoja(hoja.id)));
+    } catch (e) { fallar(res, e, 'revisado'); }
 }
 
 export async function saldosDelMes(req: Request & { user?: JwtPayload }, res: Response) {

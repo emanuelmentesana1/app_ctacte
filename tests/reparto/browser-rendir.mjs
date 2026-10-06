@@ -44,7 +44,7 @@ const plan = {
   ],
 };
 
-async function abrir(width, { datosRango = rango(), detalle = sinRendicion } = {}) {
+async function abrir(width, { datosRango = rango(), detalle = sinRendicion, planDe = () => plan } = {}) {
   const pedidos = [];
   const { page, ctx } = await setup(width, {
     beforeGoto: async (_page, c) => {
@@ -59,7 +59,8 @@ async function abrir(width, { datosRango = rango(), detalle = sinRendicion } = {
         pedidos.push({ metodo: r.method(), ruta: new URL(r.url()).pathname, cuerpo });
         if (r.method() === 'GET') return reply(route, detalle);
         if (r.method() === 'PUT') return reply(route, conRendicion({ efectivo: cuerpo.efectivo, gastos: cuerpo.gastos, efectivo_contado: cuerpo.efectivo_contado }));
-        if (r.url().endsWith('/emitir')) return reply(route, cuerpo?.accion === 'emitir' ? { ...plan, resultados: [{ cod_cliente: 101, ok: true, recibo_id: '59100001' }], frenado: false } : plan);
+        if (r.url().endsWith('/emitir')) return reply(route, cuerpo?.accion === 'emitir' ? { ...plan, resultados: [{ cod_cliente: 101, ok: true, recibo_id: '59100001' }], frenado: false } : planDe(pedidos));
+        if (r.url().endsWith('/revisado')) return reply(route, conRendicion({ version: 3, efectivo: [{ cod_cliente: 101, importe: 412_300, revisado: { por: 'u-anto', nombre: 'Anto', at: '2026-10-06T16:00:00Z', importe: 412_300 } }, { cod_cliente: 102, importe: 50_000 }] }));
         if (r.url().endsWith('/controlar')) return reply(route, conRendicion({ controlado_por: 'Maca', controlado_at: '2026-10-06T13:00:00Z', lo_conto_quien_pregunta: false }));
         return reply(route, { error: 'no simulado' }, 500);
       });
@@ -165,6 +166,28 @@ try {
       const put = pedidos.filter(p => p.metodo === 'PUT').at(-1);
       const alfa = put?.cuerpo.efectivo.find(l => l.cod_cliente === 101);
       assert(JSON.stringify(alfa?.facturas) === JSON.stringify([{ id: 'FA2', importe: 412_300 }]), `No guardó la elección: ${JSON.stringify(alfa)}`);
+    } finally { await ctx.close(); }
+  });
+
+  await test('Rendir: un posible repetido se emite igual si alguien lo revisa (Mati, 06/10): confirma y queda quién fue', async () => {
+    const repetido = { ...plan, plan: [{ cod_cliente: 101, importe: 412_300, estado: 'salteado', motivo: 'Puede estar repetido: hay un pago cargado en la app del mismo día por un importe parecido. Revisalo antes de emitir.', pendientes: plan.plan[0].pendientes }, plan.plan[1]] };
+    const liberado = { ...plan, plan: [{ ...plan.plan[0], revisado: { por: 'u-anto', nombre: 'Anto', at: '2026-10-06T16:00:00Z', importe: 412_300 } }, plan.plan[1]] };
+    const { page, ctx, pedidos } = await abrir(1440, { detalle: conRendicion(), planDe: ps => (ps.some(p => p.ruta.endsWith('/revisado')) ? liberado : repetido) });
+    try {
+      await abrirRendir(page);
+      await page.locator('button.rr-vista').click();
+      const paso = page.locator('.rr-paso', { hasText: 'CLIENTE ALFA' });
+      await paso.locator('button.rr-revisado').waitFor();
+      // 🔴 Lo ya cargado a mano en IM es el mismo efectivo: eso no se fuerza.
+      assert(!(await page.locator('.rr-paso', { hasText: 'CLIENTE BETA' }).locator('button.rr-revisado').count()), 'Deja forzar lo ya cargado a mano');
+      let pregunta = '';
+      page.once('dialog', d => { pregunta = d.message(); d.accept(); });
+      await paso.locator('button.rr-revisado').click();
+      await page.locator('.rr-paso', { hasText: 'revisado por Anto' }).waitFor();
+      assert(/CLIENTE ALFA/.test(pregunta) && /registrado/.test(pregunta), `La confirmación no dice qué ni que queda registrado: ${pregunta}`);
+      const marca = pedidos.find(p => p.ruta.endsWith('/revisado'));
+      assert(marca?.cuerpo?.cod_cliente === 101, `No marcó el cliente: ${JSON.stringify(marca)}`);
+      assert(await page.locator('button.rr-guardar').isDisabled(), 'La marca dejó la rendición como «sin guardar»');
     } finally { await ctx.close(); }
   });
 
