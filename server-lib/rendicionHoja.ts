@@ -282,6 +282,8 @@ export function armarRendiciones(e: EntradaRendicion): { hojas: HojaRendicion[];
     const salida: HojaRendicion[] = hojas.map(h => {
         const porCliente = new Map<number, PedidoIn[]>();
         for (const p of h.pedidos) porCliente.set(Number(p.cod_cliente), [...(porCliente.get(Number(p.cod_cliente)) ?? []), p]);
+        // Mati (06/10/2026): en el mismo orden que la hoja impresa, para seguirla con el papel en la mano.
+        // Es el criterio de `impresionHoja` (hojasRuta.ts): por nombre, en castellano ("Ñ" después de "N").
         const filas: FilaRendicion[] = [...porCliente.entries()].map(([cod, ps]) => {
             // 🔄 05/10/2026: lo marcado «No salió» no cuenta, ni sus notas: igual que en la Liquidación.
             const salieron = ps.filter(p => !p.no_salio);
@@ -315,7 +317,7 @@ export function armarRendiciones(e: EntradaRendicion): { hojas: HojaRendicion[];
                 compartido: (hojasDelCliente.get(`${fechaDe(h)}|${cod}`)?.length ?? 0) > 1,
                 no_salieron: ps.length - salieron.length,
             };
-        });
+        }).sort((a, b) => a.cliente.localeCompare(b.cliente, 'es', { sensitivity: 'base' }));
         const gastos = gastosPorNumero.get(h.numero) ?? [];
         const suma = (k: keyof FilaRendicion) => centavos(filas.reduce((s, f) => s + (Number(f[k]) || 0), 0));
         const efectivo = suma('efectivo');

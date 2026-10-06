@@ -35,6 +35,13 @@ const base = (over: Partial<Parameters<typeof armarRendiciones>[0]> = {}) => arm
 });
 
 describe('armarRendiciones — por cliente', () => {
+    it('🔑 los clientes salen en el orden de la hoja impresa: alfabético en castellano (Mati, 06/10/2026)', () => {
+        // Cargados en otro orden, como llegan de la base. La hoja impresa (hojasRuta.ts) los ordena por nombre.
+        const nombres = ['ZARATE Ana', 'ñandú SRL', 'ÁVILA Juan', 'NUÑEZ Luis', 'bustos Sebastián'];
+        const r = base({ hojas: [hoja(3450, '2026-10-05', nombres.map((n, i) => pedido(200 + i, 1_000, { cliente_nombre: n })))] });
+        expect(r.hojas[0].filas.map(f => f.cliente)).toEqual(['ÁVILA Juan', 'bustos Sebastián', 'NUÑEZ Luis', 'ñandú SRL', 'ZARATE Ana']);
+    });
+
     it('🔑 el efectivo sale de Caja Repartos con la fecha de la hoja; lo de otras cuentas no es del reparto', () => {
         const r = base({
             hojas: [hoja(3423, '2026-09-21', [pedido(101, 400_000)])],
