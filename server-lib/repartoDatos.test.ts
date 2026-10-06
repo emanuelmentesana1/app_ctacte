@@ -76,3 +76,14 @@ it('listar conserva la hoja legacy y las demás aunque una factura no sea verifi
  await expect(enriquecerEntregas(pedidos)).rejects.toThrow('verificar');
  await expect(enriquecerHojas(hojas)).rejects.toThrow('verificar');
 });
+
+/** 🔴 06/10/2026 — opción C: una factura complementaria registrada como corrección SUMA; antes rompía la hoja (409). */
+describe('factura complementaria entre las notas de una entrega', () => {
+  it('suma como una ND y no corta el total', () => {
+    expect(netoNotas([{ id: '1', tipo: 'NC B', total: 56755.28, numero: 30215 }, { id: '2', tipo: 'FA B', total: 47364.72, numero: 51300 }]))
+      .toBe(-9390.56);
+  });
+  it('un tipo desconocido sigue cortando', () => {
+    expect(() => netoNotas([{ id: '3', tipo: 'RE', total: 10, numero: 1 }])).toThrow();
+  });
+});

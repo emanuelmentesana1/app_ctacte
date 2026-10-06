@@ -65,9 +65,10 @@ describe('lo que se le manda a InfoManager', () => {
     expect(m.post.mock.calls[0][0]).toBe('/api/v2/notas-credito');
     expect(m.post.mock.calls[0][2]).toBe('corr-1-v1');
     vi.clearAllMocks(); m.post.mockResolvedValue(okIM);
-    await emitirNotaV2({ ...BASE, tipo: 'ND', tipo_nc: undefined });
+    await emitirNotaV2({ ...BASE, tipo: 'ND', tipo_nc: 'FI' });
     expect(m.post.mock.calls[0][0]).toBe('/api/v2/notas-debito');
-    expect(cuerpo().tipo_nc).toBeUndefined();
+    // 🔄 06/10/2026: IM exige el subtipo también en la ND ("DC, FI, RM").
+    expect(cuerpo().tipo_nc).toBe('FI');
   });
 });
 
@@ -85,6 +86,12 @@ describe('lo que NO se emite', () => {
 
   it('🔴 una NC sin subtipo: InfoManager lo exige y adivinarlo cambia qué hace la nota', async () => {
     await rechaza({ tipo_nc: undefined }, /subtipo|tipo_nc/i);
+  });
+
+  /** 06/10/2026: InfoManager rechazó las tres ND de la app con "tipo_nc es obligatorio". */
+  it('🔴 una ND sin subtipo, o con DE (que sólo existe en la NC), no se manda', async () => {
+    await rechaza({ tipo: 'ND', tipo_nc: undefined }, /subtipo|tipo_nc/i);
+    await rechaza({ tipo: 'ND', tipo_nc: 'DE' }, /subtipo|tipo_nc/i);
   });
 
   it('🔴 sin renglones', async () => {
@@ -174,7 +181,7 @@ describe('los campos de AFIP', () => {
     await emitirNotaV2(BASE);
     expect(cuerpo().afip_conceptos_fe).toBe(1);
     vi.clearAllMocks(); m.post.mockResolvedValue(okIM);
-    await emitirNotaV2({ ...BASE, tipo: 'ND', tipo_nc: undefined });
+    await emitirNotaV2({ ...BASE, tipo: 'ND', tipo_nc: 'FI' });
     expect(cuerpo().afip_conceptos_fe).toBe(0);
   });
 });

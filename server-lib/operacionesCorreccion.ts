@@ -5,6 +5,7 @@ import { emitirComponente } from './emisorNotas.js';
 import type { SubtipoCorreccion } from './subtipoNota.js';
 import type { DatosComprobante, ResultadoEmision } from './facturarIM.js';
 import type { RenglonCorreccion } from './correccionFactura.js';
+import { fetchVentas, fechaArgentina } from './infomanager.js';
 
 export class ErrorOperacion extends Error {
   constructor(message: string, public status = 409) { super(message); }
@@ -18,7 +19,7 @@ export interface OperacionFactura {
    * saliendo por la API vieja, porque adivinarle el subtipo a una corrección ya en curso sería
    * inventar qué pasó.
    */
-  componentes: Array<{ tipo: 'NC' | 'ND'; datos: DatosComprobante; subtipo?: SubtipoCorreccion }>;
+  componentes: Array<{ tipo: 'NC' | 'ND' | 'FA' | 'RE'; datos: DatosComprobante; subtipo?: SubtipoCorreccion }>;
   finales: RenglonCorreccion[];
   indice: number; estado: 'listo' | 'emitiendo' | 'incierto' | 'completo' | 'cancelado';
   resultados: Array<{ id: string; numero: number | null; tipo: string; total: number }>;
@@ -131,9 +132,58 @@ export function resumenOperacion(o: OperacionFactura) {
   const conflicto = conflictoNumeracionNota(o);
   return { id: o.id, clase: o.clase, estado: o.estado, entrada: o.peticion.entrada, motivo: o.peticion.motivo,
     emitidos: o.resultados, error: o.error, resultado_por_conciliar: o.resultado_por_conciliar,
-    puede_retomar: o.estado === 'listo' && !conflicto,
+    // Una FA o un RE sin respuesta se puede "verificar": se busca por su marca (`conciliarComplemento`).
+    puede_retomar: (o.estado === 'listo' && !conflicto) || (o.estado === 'incierto' && esComplemento(o.componentes[o.indice])),
     ...(conflicto ? { requiere_revision_numeracion: true, instruccion: GUIA_NUMERACION_NOTA } : {}),
     puede_cancelar: o.estado === 'listo' && o.indice === 0 && !o.resultados.length && !!o.error };
+}
+
+/**
+ * 🔴 06/10/2026 — LA FACTURA Y EL REMITO COMPLEMENTARIOS (opción C de Mati).
+ *
+ * Necesitan la migración 059: sin ella, `terminar_paso_factura` registraría el remito como si
+ * fuera una nota y las hojas de ruta, la liquidación y las rendiciones cortarían con error. Se
+ * verifica ANTES de crear la operación, así que si falta no se emite nada.
+ */
+const esComplemento = (c?: { tipo?: string }) => c?.tipo === 'FA' || c?.tipo === 'RE';
+/** La marca que llevan en las observaciones: es lo que permite encontrarlos si IM no contestó. */
+export const marcaOperacion = (operacionId: string, tipo: string) => `[OP:${operacionId}:${tipo}]`;
+
+export async function exigirMigracionComplementos() {
+  const { error } = await sb().from('facturas_remitos_complementarios').select('im_remito_id').limit(1);
+  if (error) throw new ErrorOperacion(`Falta aplicar la migración 059 (factura complementaria) en la base: ${error.message}. No se emitió nada.`, 503);
+}
+
+/**
+ * IM no contestó al emitir la FA o el RE: se busca en InfoManager por la marca de la operación.
+ *
+ * 🔴 SÓLO SOBRE EVIDENCIA PROPIA Y POSITIVA, igual que la conciliación de Facturar
+ * (`conciliarSinRespuesta.ts`): uno solo, del mismo cliente y empresa, vigente y con la marca.
+ * No encontrarlo NO destraba nada: podría haber salido con otra fecha. Se dice qué mirar.
+ */
+async function conciliarComplemento(o: OperacionFactura): Promise<OperacionFactura> {
+  const c = o.componentes[o.indice];
+  const marca = marcaOperacion(o.id, c.tipo);
+  const fecha = String(c.datos.fecha ?? '').slice(0, 10) || fechaArgentina();
+  const ventas = await fetchVentas(fecha, fecha, { sinCache: true });
+  const candidatos = (ventas as any[]).filter(v =>
+    String(v.tipo_comprobante ?? '').trim().toUpperCase() === c.tipo &&
+    String(v.anulada ?? '').trim().toUpperCase() !== 'S' &&
+    Number(v.cod_cliente) === Number(c.datos.cod_cliente) && Number(v.cod_empresa) === Number(c.datos.cod_empresa) &&
+    String(v.observaciones ?? '').includes(marca) && idIM(v.id) !== null);
+  const nombre = c.tipo === 'FA' ? 'factura complementaria' : 'remito complementario';
+  if (candidatos.length !== 1) {
+    throw new ErrorOperacion(candidatos.length
+      ? `Hay ${candidatos.length} comprobantes con la marca ${marca} en InfoManager. Revisá cuál corresponde: no se registró ninguno.`
+      : `InfoManager no contestó al emitir la ${nombre} y no la encuentro con la marca ${marca} del ${fecha}. Revisala en InfoManager antes de seguir: no se vuelve a emitir a ciegas.`);
+  }
+  const v = candidatos[0];
+  const letra = String(v.tipo_factura ?? '').trim().toUpperCase();
+  const resultado = { id: idIM(v.id)!, numero: Number.isFinite(Number(v.numero)) ? Number(v.numero) : null,
+    tipo: c.tipo === 'FA' ? `FA ${letra}`.trim() : 'RE', total: c.datos.total };
+  const { data, error } = await sb().rpc('adoptar_paso_factura', { p_tenant: TENANT_ID, p_id: o.id, p_indice: o.indice, p_resultado: resultado });
+  if (error || !data) throw new ErrorOperacion(`Encontré ${resultado.tipo} ${resultado.numero ?? ''} pero no pude registrarlo: ${error?.message ?? 'sin confirmación'}. No se emitió nada más.`, 503);
+  return data as OperacionFactura;
 }
 
 export async function cancelarOperacion(id: string) {
@@ -160,6 +210,7 @@ export async function ejecutarOperacion(operacion: OperacionFactura) {
 async function ejecutarOperacionReclamada(operacion: OperacionFactura) {
   let o = operacion;
   while (o.estado !== 'completo') {
+    if (o.estado === 'incierto' && esComplemento(o.componentes[o.indice])) { o = await conciliarComplemento(o); continue; }
     if (o.estado !== 'listo') throw new ErrorOperacion(`La operación ${o.id} está ${o.estado === 'emitiendo' ? 'en curso o perdió la respuesta' : 'sin confirmar'}. Verificá los comprobantes en InfoManager; no se puede reemitir a ciegas.`);
     if (conflictoNumeracionNota(o)) throw new ErrorOperacion(GUIA_NUMERACION_NOTA);
     const token = randomUUID();

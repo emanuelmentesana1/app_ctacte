@@ -184,6 +184,16 @@ describe('liquidación mensual', () => {
       expect(r.body.choferes[0]).toMatchObject({ notas_credito: 0, notas_debito: 20000, importe: 170000 });
     });
 
+    /** 🔴 06/10/2026 — opción C: lo agregado sale como FACTURA complementaria, y el chofer la cobra. */
+    it('🔑 una factura complementaria suma como una ND (y no rompe la liquidación)', async () => {
+      tablas['hojas_ruta'] = { data: [conFactura()], error: null };
+      tablas['hojas_ruta_ajustes'] = { data: [], error: null };
+      tablas['facturas_correcciones'] = { data: [{ im_factura_id: 'FA1', im_comprobante_id: '59080001', tipo: 'FA B', total: 20000, numero: 51300 }], error: null };
+      const r = await llamar(liquidacionMensual, { query: { mes: '2026-09' } });
+      expect(r.code ?? 200).toBe(200);
+      expect(r.body.choferes[0]).toMatchObject({ notas_credito: 0, notas_debito: 20000, importe: 170000 });
+    });
+
     it('🔑 una ND cargada como ajuste del panel también suma', async () => {
       tablas['hojas_ruta'] = { data: [conFactura()], error: null };
       tablas['hojas_ruta_ajustes'] = { data: [ajuste({ tipo: 'nd', im_ajuste_tipo: 'ND B', im_ajuste_id: '58900002', importe: 20000 })], error: null };
@@ -220,7 +230,8 @@ describe('liquidación mensual', () => {
     /** 🪤 `!/^nc/` no es "es de débito", y un `Infinity` sumado da algo que parece un número. */
     it('🔑 un tipo que no es NC ni ND, o un importe ilegible, tampoco dan total', async () => {
       for (const nota of [
-        { tipo: 'FA A', total: 30000 },
+        // 🔄 06/10/2026: era 'FA A'; desde la opción C la factura complementaria es válida (suma).
+        { tipo: 'RE', total: 30000 },
         { tipo: null, total: 30000 },
         { tipo: 'NC B', total: 'ochenta mil' },
         { tipo: 'NC B', total: Infinity },

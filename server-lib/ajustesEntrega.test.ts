@@ -116,6 +116,12 @@ describe('el número final de la hoja', () => {
     expect(t.pendientes_de_emitir).toBe(1);
   });
 
+  /** 06/10/2026 — opción C: la factura complementaria por lo agregado suma, como una ND. */
+  it('🔴 la factura complementaria suma al final como una ND', async () => {
+    const t = totalesConAjustes(HOJA, [], [{ tipo: 'NC B', total: 20000 }, { tipo: 'FA B', total: 8000 }]);
+    expect(t).toMatchObject({ notas_credito: 20000, notas_debito: 8000, final: 138000 });
+  });
+
   it('sin notas, el final es lo despachado', async () => {
     expect(totalesConAjustes(HOJA, [], []).final).toBe(150000);
   });

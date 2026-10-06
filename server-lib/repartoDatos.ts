@@ -178,9 +178,13 @@ export type NotaConciliada = NotaEntrega & { fuentes: OrigenNota[] };
  */
 export type ProblemaNota = { id: string; motivo: 'conflicto' | 'tipo' | 'importe' };
 
+/**
+ * 🔄 06/10/2026: la FACTURA complementaria (opción C, lo que se agregó a una factura) suma como una
+ * ND. Antes cualquier tipo que no fuera NC/ND cortaba el total de la entrega.
+ */
 const signoNota = (n: { tipo?: unknown }): -1 | 1 | null => {
   const t = String(n.tipo ?? '');
-  return /^nc/i.test(t) ? -1 : /^nd/i.test(t) ? 1 : null;
+  return /^nc/i.test(t) ? -1 : /^nd/i.test(t) || /^fa\b/i.test(t) ? 1 : null;
 };
 const totalNota = (n: { total?: unknown }): number | null => {
   const v = Number(n.total);

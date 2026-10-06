@@ -32,13 +32,15 @@ describe('calcularCorreccion', () => {
     expect(c.diferencia).toBe(-1000);
   });
 
-  it('🔴 agregar un producto va a la NOTA DE DÉBITO', () => {
+  // 🔄 06/10/2026: iba a la ND; ahora es factura complementaria (opción C, ver abajo).
+  it('🔴 agregar un producto va a la FACTURA COMPLEMENTARIA', () => {
     const c = calcularCorreccion(
       [{ cod_articulo: 10, cantidad: 5, precio: 1000 }],
       [{ cod_articulo: 10, cantidad: 5, precio: 1000 }, { cod_articulo: 30, cantidad: 3, precio: 250 }],
     );
     expect(c.nc).toEqual([]);
-    expect(c.nd[0]).toMatchObject({ cod_articulo: 30, cantidad: 3, precio: 250 });
+    expect(c.nd).toEqual([]);
+    expect(c.fa[0]).toMatchObject({ cod_articulo: 30, cantidad: 3, precio: 250 });
     expect(c.diferencia).toBe(750);
   });
 
@@ -160,7 +162,7 @@ describe('calcularCorreccion', () => {
       [{ cod_articulo: 30, cantidad: 1, precio: 10 }, { cod_articulo: 10, cantidad: 1, precio: 10 },
        { cod_articulo: 20, cantidad: 1, precio: 10 }],
     );
-    expect(c.nd.map(r => r.cod_articulo)).toEqual([10, 20, 30]);
+    expect(c.fa.map(r => r.cod_articulo)).toEqual([10, 20, 30]);
   });
 
   /** El caso real de BIANCONI del 09/09/2026: la factura salió $73.064,38 por debajo. */
@@ -451,5 +453,56 @@ describe('la nota financiera', () => {
   it('🪤 un importe negativo o cero no es una nota: el signo lo da el tipo', () => {
     expect(() => renglonDeAjuste(0, 'x')).toThrow();
     expect(() => renglonDeAjuste(-500, 'x')).toThrow();
+  });
+});
+
+/**
+ * 🔴 06/10/2026 — LA MERCADERÍA AGREGADA VA EN UNA FACTURA COMPLEMENTARIA, NO EN UNA ND.
+ *
+ * Mati eligió la opción C: lo que se agrega sale como factura + remito (el remito descuenta el
+ * stock). La ND queda sólo para una diferencia de precio. Los tres casos trabados en producción
+ * eran mercadería agregada: RUIZ (FA B 51218, +4 del 332), 51050 y 51136.
+ */
+describe('factura complementaria (opción C)', () => {
+  it('🔴 más cantidad del mismo artículo: va a la factura, al precio facturado, y no hay ND', () => {
+    const c = calcularCorreccion(
+      [{ cod_articulo: 320, cantidad: 4, precio: 14188.82 }, { cod_articulo: 332, cantidad: 4, precio: 11841.18 }],
+      [{ cod_articulo: 332, cantidad: 8, precio: 11841.18 }],
+    );
+    expect(c.nd).toEqual([]);
+    expect(c.fa).toEqual([expect.objectContaining({ cod_articulo: 332, cantidad: 4, precio: 11841.18 })]);
+    expect(c.total_fa).toBe(47364.72);
+    expect(c.nc).toEqual([expect.objectContaining({ cod_articulo: 320, cantidad: 4 })]);
+    // Lo que explica la diferencia sigue cerrando al centavo.
+    expect(c.diferencia).toBe(Math.round((47364.72 - 4 * 14188.82) * 100) / 100);
+  });
+
+  it('🔴 un artículo nuevo, con su lista y su descuento: va a la factura', () => {
+    const c = calcularCorreccion(
+      [{ cod_articulo: 352, cantidad: 2, precio: 12000 }],
+      [{ cod_articulo: 352, cantidad: 2, precio: 12000 }, { cod_articulo: 351, cantidad: 2, precio: 12453.72, descuento_porc: 35, cod_lista_precios: 14 }],
+    );
+    expect(c.nd).toEqual([]);
+    expect(c.fa).toEqual([expect.objectContaining({ cod_articulo: 351, cantidad: 2, precio: 12453.72, descuento_porc: 35, cod_lista_precios: 14 })]);
+    expect(c.total_fa).toBeCloseTo(2 * 12453.72 * 0.65, 2);
+  });
+
+  it('una diferencia de precio sigue siendo ND, sin factura', () => {
+    const c = calcularCorreccion(
+      [{ cod_articulo: 10, cantidad: 4, precio: 1000 }],
+      [{ cod_articulo: 10, cantidad: 4, precio: 1200 }],
+    );
+    expect(c.fa).toEqual([]);
+    expect(c.nd).toEqual([expect.objectContaining({ cod_articulo: 10, cantidad: 4, precio: 200 })]);
+  });
+
+  it('🔑 más cantidad Y más precio: la cantidad a la factura (al precio viejo), el precio a la ND', () => {
+    const c = calcularCorreccion(
+      [{ cod_articulo: 10, cantidad: 5, precio: 1200 }],
+      [{ cod_articulo: 10, cantidad: 9, precio: 1500 }],
+    );
+    expect(c.fa).toEqual([expect.objectContaining({ cod_articulo: 10, cantidad: 4, precio: 1200 })]);
+    expect(c.nd).toEqual([expect.objectContaining({ cod_articulo: 10, cantidad: 9, precio: 300 })]);
+    expect(c.diferencia).toBe(9 * 1500 - 5 * 1200);
   });
 });

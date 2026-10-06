@@ -40,6 +40,8 @@ const FA = (id: string, total: number) => ({
 });
 
 let vinculos: any[] = [];
+let complementarios: any[] = [];
+let sinTablaComplementos = false;
 /** Ata cada remito con su factura, como haría el apareo real. */
 const vincular = (pares: Array<[string, string, number]>) => {
   apareo.mapa = new Map(pares.map(([re, fa, numero]) => [re, { im_factura_id: fa, im_factura_numero: numero, im_factura_tipo: 'FA B', origen: 'nuestra' }]));
@@ -49,13 +51,14 @@ beforeEach(() => {
   vi.clearAllMocks(); invalidarRemitos(); invalidarImportesFacturas();
   apareo.mapa = new Map();
   m.fetchVentasItems.mockResolvedValue([]);
-  vinculos = [];
+  vinculos = []; complementarios = []; sinTablaComplementos = false;
   m.sbMock.mockImplementation(() => ({
     from: (t: string) => {
-      const data = t === 'presupuestos_facturados' ? vinculos : [];
+      const data = t === 'presupuestos_facturados' ? vinculos : t === 'facturas_remitos_complementarios' ? complementarios : [];
+      const error = t === 'facturas_remitos_complementarios' && sinTablaComplementos ? { message: 'relation does not exist' } : null;
       const q: any = {
         select: () => q, eq: () => q, in: () => q, gte: () => q, lte: () => q, not: () => q, is: () => q, or: () => q, order: () => q, limit: () => q,
-        then: (r: any, j: any) => Promise.resolve({ data, error: null }).then(r, j),
+        then: (r: any, j: any) => Promise.resolve({ data: error ? null : data, error }).then(r, j),
       };
       return q;
     },
@@ -175,3 +178,23 @@ describe('el camino de asignar no acepta un importe sin acreditar', () => {
   });
 });
 
+
+/**
+ * 🔴 06/10/2026 — opción C: el remito complementario de una corrección va con la entrega original
+ * (la mercadería ya viajó en ese camión). No es una entrega nueva para asignar.
+ */
+describe('remito complementario', () => {
+  it('🔑 no aparece entre los pendientes de asignar', async () => {
+    m.fetchVentas.mockResolvedValue([RE('1', '900'), RE('3', '902', 47364.72)]);
+    complementarios = [{ im_remito_id: '3' }];
+    const v = await vistaRemitos('2026-09-09', '2026-09-14', true);
+    expect(v.pendientes.map((f: any) => String(f.im_comprobante_id))).toEqual(['1']);
+  });
+
+  it('🪤 si la tabla todavía no existe (falta la 059), la pantalla abre igual', async () => {
+    m.fetchVentas.mockResolvedValue([RE('1', '900')]);
+    sinTablaComplementos = true;
+    const v = await vistaRemitos('2026-09-09', '2026-09-14', true);
+    expect(v.pendientes).toHaveLength(1);
+  });
+});

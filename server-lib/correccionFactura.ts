@@ -31,7 +31,7 @@ import {
 import { exigirTipoEmpresa, ErrorVersion } from './versionPresupuesto.js';
 import { diaValido } from './moverFechaComprobante.js';
 import { letraDeFactura } from './facturarIM.js';
-import { ErrorOperacion, idOperacion, buscarOperacion, estadoCorreccion, validarVersion, iniciarOperacion, ejecutarOperacion, resumenOperacion, verificarPeticion, cancelarOperacion } from './operacionesCorreccion.js';
+import { ErrorOperacion, idOperacion, buscarOperacion, estadoCorreccion, validarVersion, iniciarOperacion, ejecutarOperacion, resumenOperacion, verificarPeticion, cancelarOperacion, exigirMigracionComplementos, marcaOperacion } from './operacionesCorreccion.js';
 import { usuarioIM } from './pedidos.js';
 import { invalidarVista } from './vistaPresupuestos.js';
 import { invalidarRemitos } from './vistaRemitos.js';
@@ -55,10 +55,17 @@ export interface RenglonCorreccion {
 /** Lo que hay que emitir para pasar de la factura a lo que corresponde. */
 export interface Correccion {
   nc: RenglonCorreccion[];
+  /** Sólo las diferencias de PRECIO que suben. La mercadería agregada va en `fa`. */
   nd: RenglonCorreccion[];
+  /**
+   * 🔴 06/10/2026 — La mercadería AGREGADA: sale como factura complementaria con su remito, que
+   * descuenta el stock (opción C de Mati). Antes iba en la ND, que no mueve mercadería.
+   */
+  fa: RenglonCorreccion[];
   /** Cuánto baja y cuánto sube, en positivo. */
   total_nc: number;
   total_nd: number;
+  total_fa: number;
   /** El neto: negativo = se le devuelve plata al cliente. */
   diferencia: number;
 }
@@ -195,6 +202,7 @@ export function calcularCorreccion(
 ): Correccion {
   const nc: RenglonCorreccion[] = [];
   const nd: RenglonCorreccion[] = [];
+  const fa: RenglonCorreccion[] = [];
 
   // 🪤 Por artículo, juntando los renglones repetidos: indexar pisando perdía mercadería.
   const viejos = new Map(consolidarRenglones(originales).map(r => [Number(r.cod_articulo), r]));
@@ -240,7 +248,8 @@ export function calcularCorreccion(
     // que NO estaba puede usar el precio nuevo, porque es el único que tiene.
     const dq = q1 - q0;
     if (dq < -CERO) agregar(nc, v!, -dq, p0, d0);
-    else if (dq > CERO) agregar(nd, base, dq, v ? p0 : p1, v ? d0 : d1);
+    // Lo agregado es mercadería que sale: factura complementaria con remito, no ND (opción C).
+    else if (dq > CERO) agregar(fa, base, dq, v ? p0 : p1, v ? d0 : d1);
 
     // 2) El precio, sobre la cantidad que QUEDA: es la lista mal cargada.
     // 🪤 Sobre `q1` y no sobre `q0`: si además cambió la cantidad, el pedazo de cantidad ya se
@@ -266,7 +275,8 @@ export function calcularCorreccion(
     rs.reduce((s, r) => s + r.cantidad * netoUnitario(r.precio, descuentoDe(r)), 0));
   const total_nc = suma(nc);
   const total_nd = suma(nd);
-  return { nc, nd, total_nc, total_nd, diferencia: centavos(total_nd - total_nc) };
+  const total_fa = suma(fa);
+  return { nc, nd, fa, total_nc, total_nd, total_fa, diferencia: centavos(total_nd + total_fa - total_nc) };
 }
 
 /**
@@ -495,22 +505,22 @@ async function tramitarCorreccion(req: Request & { user?: JwtPayload }, res: Res
     const correccion = clase === 'productos' ? calcularCorreccion(estado.renglones, finales) : (() => {
       const e = entrada as { tipo: 'NC' | 'ND'; importe: number };
       const r = renglonDeAjuste(e.importe, motivo);
-      return { nc: e.tipo === 'NC' ? [r] : [], nd: e.tipo === 'ND' ? [r] : [],
+      return { nc: e.tipo === 'NC' ? [r] : [], nd: e.tipo === 'ND' ? [r] : [], fa: [] as RenglonCorreccion[], total_fa: 0,
         total_nc: e.tipo === 'NC' ? e.importe : 0, total_nd: e.tipo === 'ND' ? e.importe : 0,
         diferencia: e.tipo === 'NC' ? -e.importe : e.importe };
     })();
     if (clase === 'productos') {
       const total = (rs: RenglonCorreccion[]) => rs.reduce((n, r) => n + Number(r.cantidad) * netoUnitario(r.precio, descuentoDe(r)), 0);
       const esperado = centavos(total(finales) - total(estado.renglones));
-      if (Math.abs(centavos(correccion.total_nd - correccion.total_nc) - esperado) > 0.010001) {
+      if (Math.abs(centavos(correccion.total_nd + correccion.total_fa - correccion.total_nc) - esperado) > 0.010001) {
         throw new ErrorFiscal('La precisión de InfoManager cambia la diferencia de la corrección en más de un centavo. Revisá cantidades/precios antes de emitir.');
       }
     } else {
       const enriquecer = (rs: RenglonCorreccion[]) => conIVAConfiable(rs.map(r => ({ ...r, cod_lista_precios: Number(cab.cod_lista_precios) || 12 })), []);
       correccion.nc = await enriquecer(correccion.nc); correccion.nd = await enriquecer(correccion.nd);
     }
-    if (!correccion.nc.length && !correccion.nd.length) throw new ErrorOperacion('No hay ninguna diferencia con el estado corregido de la factura.', 400);
-    if ((correccion.nc.length && !(correccion.total_nc > 0)) || (correccion.nd.length && !(correccion.total_nd > 0))) {
+    if (!correccion.nc.length && !correccion.nd.length && !correccion.fa.length) throw new ErrorOperacion('No hay ninguna diferencia con el estado corregido de la factura.', 400);
+    if ((correccion.nc.length && !(correccion.total_nc > 0)) || (correccion.nd.length && !(correccion.total_nd > 0)) || (correccion.fa.length && !(correccion.total_fa > 0))) {
       throw new ErrorOperacion('La diferencia es menor a un centavo. No se emitió nada.', 400);
     }
     if (!letra || !(Number(cab.cod_vendedor) > 0) || !(Number(cab.cod_cliente) > 0) || !(Number(cab.cod_empresa) > 0)) {
@@ -533,9 +543,21 @@ async function tramitarCorreccion(req: Request & { user?: JwtPayload }, res: Res
      */
     const subtipo: SubtipoCorreccion =
       clase === 'financiera' ? 'FI' : (subtipoDeCorreccion(originales as any, finales as any) ?? 'FI');
-    const componentes: Array<{ tipo: 'NC' | 'ND'; datos: any; subtipo?: SubtipoCorreccion }> = [];
+    const componentes: Array<{ tipo: 'NC' | 'ND' | 'FA' | 'RE'; datos: any; subtipo?: SubtipoCorreccion }> = [];
     if (correccion.nc.length) componentes.push({ tipo: 'NC', subtipo, datos: { ...base, observaciones: `${base.observaciones} [OP:${operacionId}:NC]`, total: correccion.total_nc, items: correccion.nc } });
-    if (correccion.nd.length) componentes.push({ tipo: 'ND', datos: { ...base, observaciones: `${base.observaciones} [OP:${operacionId}:ND]`, total: correccion.total_nd, items: correccion.nd } });
+    /**
+     * 🔴 06/10/2026 — LO AGREGADO: FACTURA COMPLEMENTARIA + REMITO (opción C de Mati). El remito
+     * descuenta el stock; la ND no lo hacía. La marca va ADELANTE de las observaciones: es lo que
+     * permite encontrarlos si IM no contesta, y así no la corta ningún límite de largo.
+     */
+    if (correccion.fa.length) {
+      await exigirMigracionComplementos();
+      for (const tipo of ['FA', 'RE'] as const) {
+        componentes.push({ tipo, datos: { ...base, observaciones: `${marcaOperacion(operacionId!, tipo)} ${base.observaciones}`.slice(0, 450), total: correccion.total_fa, items: correccion.fa } });
+      }
+    }
+    // La ND queda para lo que SUBE de precio. IM exige el subtipo: FI (sí de Mati, 06/10/2026).
+    if (correccion.nd.length) componentes.push({ tipo: 'ND', subtipo: 'FI', datos: { ...base, observaciones: `${base.observaciones} [OP:${operacionId}:ND]`, total: correccion.total_nd, items: correccion.nd } });
     const o = await iniciarOperacion({ id: operacionId!, factura: id, version: estado.version, clase,
       peticion: { entrada, motivo, numero_factura: cab.numero ?? null, origen: identidadFiscal(cab) }, componentes,
       originales: JSON.parse(JSON.stringify(originales)), finales, usuario: req.user?.sub ?? null });

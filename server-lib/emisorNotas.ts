@@ -1,5 +1,5 @@
 import { emitirNotaV2, type CodControl } from './emitirNotaV2.js';
-import { emitirNotaCredito, emitirNotaDebito, letraDeFactura, type ResultadoEmision } from './facturarIM.js';
+import { emitirNotaCredito, emitirNotaDebito, emitirFactura, emitirRemito, emitirRemitoMasivo, letraDeFactura, type ResultadoEmision } from './facturarIM.js';
 import { imV2Configurada, claveIdempotente } from './imApiV2.js';
 import { sb, TENANT_ID } from './supabase.js';
 import type { SubtipoCorreccion } from './subtipoNota.js';
@@ -23,7 +23,11 @@ import type { SubtipoCorreccion } from './subtipoNota.js';
 const activo = () => String(process.env.IM_NOTAS_V2 ?? '1') === '1';
 
 export interface ComponenteNota {
-  tipo: 'NC' | 'ND';
+  /**
+   * 🔄 06/10/2026: `FA` y `RE` son la factura complementaria y su remito, por la mercadería que se
+   * AGREGA a una factura (opción C de Mati). Antes eso iba en una ND, que no mueve stock.
+   */
+  tipo: 'NC' | 'ND' | 'FA' | 'RE';
   datos: any;
   /**
    * El subtipo que exige la v2, calculado al crear la operación (ver `subtipoNota.ts`).
@@ -36,6 +40,8 @@ export interface OperacionMinima {
   id: string;
   indice: number;
   im_factura_id: string;
+  /** Lo ya emitido por la operación: el remito complementario se marca con SU factura. */
+  resultados?: Array<{ id: string; numero?: number | null; tipo: string }>;
 }
 
 /** ¿Esta nota puede salir por la API nueva? */
@@ -43,8 +49,8 @@ export function vaPorV2(o: OperacionMinima, c: ComponenteNota): boolean {
   if (!activo() || !imV2Configurada()) return false;
   // Sin la factura que acredita no hay nada que atar, que es el motivo de usar v2.
   if (!String(o.im_factura_id ?? '').trim()) return false;
-  // La NC necesita subtipo; la ND no lo lleva.
-  return c.tipo === 'ND' || !!c.subtipo;
+  // 🔄 06/10/2026: la ND también lleva subtipo (IM lo exige). Sin él no sale por ningún lado.
+  return (c.tipo === 'NC' || c.tipo === 'ND') && !!c.subtipo;
 }
 
 /**
@@ -72,7 +78,36 @@ async function cubetaDeLaFactura(imFacturaId: string): Promise<CodControl | null
   } catch { return null; }
 }
 
+/**
+ * La factura complementaria y su remito. Son los mismos emisores de Facturar, con dos diferencias:
+ *  · la factura va SIN `origen_id`: el código del presupuesto ya lo usó la factura original, e IM
+ *    no acepta un `cod_compatibilidad` repetido (FAB 51178, 05/10/2026);
+ *  · el remito se marca con la factura COMPLEMENTARIA, que es la que ya emitió esta operación.
+ */
+async function emitirComplemento(o: OperacionMinima, c: ComponenteNota): Promise<ResultadoEmision> {
+  if (c.tipo === 'FA') return emitirFactura({ ...c.datos, origen_id: null });
+  const factura = [...(o.resultados ?? [])].reverse().find(r => /^FA\b/i.test(String(r.tipo ?? '')));
+  if (!factura?.id) {
+    return { ok: false, error: 'No está registrada la factura complementaria de este remito. No se emitió el remito.' };
+  }
+  const datos = { ...c.datos, origen_id: null, im_factura_id: factura.id };
+  const re = await emitirRemito(datos);
+  /**
+   * 🔑 Igual que al facturar: si IM lo rechaza por stock, sale por el masivo, que lo deja salir
+   * en negativo y descuenta igual (Mati, 09/09/2026: "que se remita aunque esté en negativo").
+   * 🪤 Nunca ante `sinRespuesta`: el remito puede haber salido y sería un segundo remito.
+   */
+  if (!re.ok && !re.sinRespuesta && /stock/i.test(re.error)) return emitirRemitoMasivo(datos);
+  return re;
+}
+
 export async function emitirComponente(o: OperacionMinima, c: ComponenteNota): Promise<ResultadoEmision> {
+  if (c.tipo === 'FA' || c.tipo === 'RE') return emitirComplemento(o, c);
+  if (c.tipo === 'ND' && !c.subtipo) {
+    // 🪤 Es una operación de antes del 06/10: IM la rechaza sin subtipo, y adivinárselo sería
+    // inventar qué nota es. No se manda nada.
+    return { ok: false, error: 'Esta nota de débito es de una operación anterior y no tiene subtipo. Hay que rehacer el paso pendiente antes de retomarla.' };
+  }
   if (!vaPorV2(o, c)) {
     return c.tipo === 'NC' ? emitirNotaCredito(c.datos) : emitirNotaDebito(c.datos);
   }
@@ -126,7 +161,7 @@ export async function emitirComponente(o: OperacionMinima, c: ComponenteNota): P
       cod_empresa: Number(d.cod_empresa),
       cod_vendedor: d.cod_vendedor ?? null,
       observaciones: d.observaciones ?? '',
-      ...(c.tipo === 'NC' && c.subtipo ? { tipo_nc: c.subtipo } : {}),
+      ...(c.subtipo ? { tipo_nc: c.subtipo } : {}),
       ...(codControl ? { cod_control: codControl } : {}),
       ...(reingresaStock ? { genero_re_auto: true } : {}),
       factura: { im_id: o.im_factura_id },

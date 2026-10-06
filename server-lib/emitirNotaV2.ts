@@ -115,6 +115,14 @@ export async function emitirNotaV2(input: NotaV2Input): Promise<ResultadoNotaV2>
   if (input.tipo === 'NC' && !input.tipo_nc) {
     return { ok: false, error: 'No se puede emitir la nota de crédito: falta el subtipo (DE devolución, FI financiera o DC diferencia de cotización). InfoManager lo exige y adivinarlo cambia qué hace la nota.' };
   }
+  /**
+   * 🔴 06/10/2026: la ND TAMBIÉN lo exige —"tipo_nc: El campo 'tipo_nc' es obligatorio. Valores
+   * válidos: DC, FI, RM"— y así InfoManager rechazó las tres ND que intentó la app. DE (devolución)
+   * no existe en la ND.
+   */
+  if (input.tipo === 'ND' && !['FI', 'DC'].includes(String(input.tipo_nc ?? ''))) {
+    return { ok: false, error: 'No se puede emitir la nota de débito: falta el subtipo (FI financiera o DC diferencia de cotización). InfoManager lo exige.' };
+  }
 
   if (!Array.isArray(input.items) || !input.items.length) {
     return { ok: false, error: `No se puede emitir la ${que} sin renglones.` };

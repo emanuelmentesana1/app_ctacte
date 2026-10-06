@@ -37,7 +37,8 @@ interface Factura {
   categoria_iva: string | null; letra: 'A' | 'B' | null;
 }
 
-interface Vista { nc: Renglon[]; nd: Renglon[]; total_nc: number; total_nd: number; diferencia: number }
+/** `fa`: la mercadería AGREGADA sale como factura complementaria + remito (opción C, 06/10/2026). */
+interface Vista { nc: Renglon[]; nd: Renglon[]; fa?: Renglon[]; total_nc: number; total_nd: number; total_fa?: number; diferencia: number }
 const LISTAS: Array<[number, string]> = [[12, 'Lista 1'], [13, 'Lista 2'], [14, 'Lista 3'], [15, 'Lista 4']];
 
 const money = (n: number) => '$' + Number(n ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -419,7 +420,9 @@ export function CorregirFacturaModal(
 
   async function emitir() {
     if (!vista || faltanPrecios || pendiente || bloqueoProductos) return;
-    const detalle = [vista.nc.length ? `NC ${money(vista.total_nc)}` : '', vista.nd.length ? `ND ${money(vista.total_nd)}` : ''].filter(Boolean).join(' y ');
+    const detalle = [vista.nc.length ? `NC ${money(vista.total_nc)}` : '',
+      vista.fa?.length ? `una factura complementaria por ${money(vista.total_fa ?? 0)} con su remito (descuenta el stock)` : '',
+      vista.nd.length ? `ND ${money(vista.total_nd)}` : ''].filter(Boolean).join(', ');
     if (!confirm(`Se va a emitir ${detalle} en InfoManager.\n¿Seguimos?`)) return;
     await enviar('productos', { renglones: filas }, motivo);
   }
@@ -495,7 +498,9 @@ export function CorregirFacturaModal(
         ) : resultado ? (
           <div className="cf-listo">
             {resultado.emitidos.map((e, i) => (
-              <p key={i} className="cf-ok"><CheckCircle2 size={16} /> Salió la <b>{e.tipo} {e.numero}</b> por {money(e.total)}.</p>
+              <p key={i} className="cf-ok"><CheckCircle2 size={16} /> {e.tipo === 'RE'
+                ? <>Salió el remito <b>RE {e.numero}</b>.</>
+                : <>Salió la <b>{e.tipo} {e.numero}</b> por {money(e.total)}.</>}</p>
             ))}
             {resultado.fallados.map((f, i) => (
               <p key={'f' + i} className="cf-mal"><AlertTriangle size={16} /> {f}</p>
@@ -571,7 +576,7 @@ export function CorregirFacturaModal(
             ) : (
               /* 🪤 La factura no se modifica. Que se lea antes de tocar nada: queda a la vista, corto. */
               <p className="cf-sub" title={`La factura ${factura.numero} no se toca: es un comprobante fiscal. Dejá los renglones como tendrían que haber quedado y abajo vas a ver qué notas salen.`}>
-                <Info size={13} /> La factura {factura.numero} no se toca: salen notas.
+                <Info size={13} /> La factura {factura.numero} no se toca: salen notas, y lo agregado va en una factura complementaria con su remito.
               </p>
             )}
 
@@ -745,6 +750,18 @@ export function CorregirFacturaModal(
                     ))}</ul>
                   </div>
                 )}
+                {!!vista.fa?.length && (
+                  <div className="cf-comp nd">
+                    <b>Factura complementaria {factura.letra} · {money(vista.total_fa ?? 0)}</b>
+                    <small> + remito: la mercadería agregada descuenta el stock</small>
+                    <ul>{vista.fa.map((r, i) => (
+                      <li key={i}>
+                        {r.descripcion ?? `Artículo ${r.cod_articulo}`} — {r.cantidad} × {money(Number(r.precio))}
+                        {r.descuento_porc ? ` − ${r.descuento_porc}%` : ''} = {money(importeDe(r))}
+                      </li>
+                    ))}</ul>
+                  </div>
+                )}
                 {!!vista.nd.length && (
                   <div className="cf-comp nd">
                     <b>Nota de débito {factura.letra} · {money(vista.total_nd)}</b>
@@ -777,7 +794,7 @@ export function CorregirFacturaModal(
                 </button>
               ) : (
                 <button className="cf-btn primario" onClick={() => void emitir()}
-                        disabled={!vista || faltanPrecios || emitiendo || !!bloqueoProductos || (!vista.nc.length && !vista.nd.length)}>
+                        disabled={!vista || faltanPrecios || emitiendo || !!bloqueoProductos || (!vista.nc.length && !vista.nd.length && !vista.fa?.length)}>
                   {emitiendo ? <><Loader2 size={15} className="spin" /> Emitiendo…</> : 'Emitir la corrección'}
                 </button>
               )}

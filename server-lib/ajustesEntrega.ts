@@ -142,7 +142,8 @@ export function totalesConAjustes(hoja: any, ajustes: any[], notas: ReadonlyArra
   const despachado = (hoja.hojas_ruta_pedidos ?? []).reduce((s: number, p: any) => s + Number(p.total ?? 0), 0);
   const suma = (f: (t: string) => boolean) =>
     notas.filter(n => f(String(n.tipo ?? ''))).reduce((s, n) => s + Math.abs(Number(n.total)), 0);
-  const nc = suma(t => /^nc/i.test(t)), nd = suma(t => /^nd/i.test(t));
+  // La factura complementaria (opción C, 06/10/2026) suma como una ND.
+  const nc = suma(t => /^nc/i.test(t)), nd = suma(t => /^(nd|fa\b)/i.test(t));
   return {
     hoja: { version: hoja.version, id: hoja.id, numero: hoja.numero, fecha: hoja.fecha, estado: hoja.estado },
     despachado: redondear(despachado),

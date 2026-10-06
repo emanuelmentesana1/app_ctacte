@@ -9,12 +9,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * 🔑 El interruptor existe para poder VOLVER ATRÁS en un minuto sin esperar un despliegue, no
  * para tener dos caminos para siempre. Cuando lleve un par de semanas sin sobresaltos se saca.
  */
-const m = vi.hoisted(() => ({ v2: vi.fn(), nc: vi.fn(), nd: vi.fn(), configurada: vi.fn(() => true) }));
+const m = vi.hoisted(() => ({ v2: vi.fn(), nc: vi.fn(), nd: vi.fn(), fa: vi.fn(), re: vi.fn(), masivo: vi.fn(), configurada: vi.fn(() => true) }));
 /** Lo que la base sabe de la factura que se está acreditando. `null` = no salió de la app. */
 let filaFacturada: any = { im_remito_id: 're-1' };
 let errorAlLeer: any = null;
 vi.mock('./emitirNotaV2.js', () => ({ emitirNotaV2: m.v2 }));
-vi.mock('./facturarIM.js', () => ({ emitirNotaCredito: m.nc, emitirNotaDebito: m.nd, letraDeFactura: (c: string) => (c === 'RI' ? 'A' : 'B') }));
+vi.mock('./facturarIM.js', () => ({ emitirNotaCredito: m.nc, emitirNotaDebito: m.nd, emitirFactura: m.fa, emitirRemito: m.re, emitirRemitoMasivo: m.masivo, letraDeFactura: (c: string) => (c === 'RI' ? 'A' : 'B') }));
 // `claveIdempotente` va de VERDAD: es la regla de formato que InfoManager impone, y lo que
 // se quiere probar acá es que la clave que manda el emisor la cumpla.
 vi.mock('./imApiV2.js', async original => ({ ...(await original<any>()), imV2Configurada: m.configurada }));
@@ -43,6 +43,9 @@ beforeEach(() => {
   m.v2.mockResolvedValue({ ok: true, im_id: '58924169', numero: 30117 });
   m.nc.mockResolvedValue({ ok: true, id: '999', numero: 5, tipo: 'NC B' });
   m.nd.mockResolvedValue({ ok: true, id: '888', numero: 6, tipo: 'ND B' });
+  m.fa.mockResolvedValue({ ok: true, id: '59080001', numero: 51300, tipo: 'FA B' });
+  m.re.mockResolvedValue({ ok: true, id: '59080002', numero: 78700, tipo: 'RE' });
+  m.masivo.mockResolvedValue({ ok: true, id: '59080003', numero: 78701, tipo: 'RE' });
 });
 
 describe('cuándo sale por la API nueva', () => {
@@ -77,7 +80,7 @@ describe('cuándo sale por la API nueva', () => {
    */
   it('🔴 y cambia con el paso: dos notas de la misma operación no comparten clave', async () => {
     await emitirComponente(OP as any, comp({ subtipo: 'FI' }) as any);
-    await emitirComponente({ ...OP, indice: 1 } as any, { tipo: 'ND', datos: DATOS } as any);
+    await emitirComponente({ ...OP, indice: 1 } as any, { tipo: 'ND', datos: DATOS, subtipo: 'FI' } as any);
     expect(m.v2.mock.calls[1][0].idempotencyKey).toBe('op-77-1-');
   });
 
@@ -151,10 +154,65 @@ describe('cuándo sale por la API nueva', () => {
     expect(payload.genero_re_auto).toBeUndefined();
   });
 
-  it('una nota de débito no lleva subtipo: es sólo de la NC', async () => {
-    await emitirComponente({ ...OP, indice: 1 } as any, { tipo: 'ND', datos: DATOS } as any);
-    expect(m.v2.mock.calls[0][0].tipo_nc).toBeUndefined();
-    expect(m.v2.mock.calls[0][0].tipo).toBe('ND');
+  /**
+   * 🔄 06/10/2026: era "la ND no lleva subtipo", y así IM las rechazó TODAS ("tipo_nc es
+   * obligatorio. Valores válidos: DC, FI, RM"). La ND de precio va con FI (sí de Mati).
+   */
+  it('🔴 la nota de débito lleva su subtipo (FI para una diferencia de precio)', async () => {
+    await emitirComponente({ ...OP, indice: 1 } as any, { tipo: 'ND', datos: DATOS, subtipo: 'FI' } as any);
+    expect(m.v2.mock.calls[0][0]).toMatchObject({ tipo: 'ND', tipo_nc: 'FI' });
+    expect(m.v2.mock.calls[0][0].cod_control).toBeUndefined();
+  });
+
+  it('🔴 una ND SIN subtipo (operación anterior al cambio) no se manda por ningún lado', async () => {
+    const r = await emitirComponente({ ...OP, indice: 1 } as any, { tipo: 'ND', datos: DATOS } as any);
+    expect(r.ok).toBe(false);
+    expect(r).not.toHaveProperty('sinRespuesta', true);
+    expect(m.v2).not.toHaveBeenCalled();
+    expect(m.nd).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 🔴 06/10/2026 — LA MERCADERÍA AGREGADA: FACTURA COMPLEMENTARIA + REMITO (opción C de Mati).
+ */
+describe('factura y remito complementarios', () => {
+  const FA_OK = { id: '59080001', numero: 51300, tipo: 'FA B', total: 47364.72 };
+
+  it('🔑 la factura sale por el emisor de facturas, sin código de presupuesto', async () => {
+    const r = await emitirComponente({ ...OP, indice: 1, resultados: [] } as any, { tipo: 'FA', datos: DATOS } as any);
+    expect(m.fa).toHaveBeenCalledTimes(1);
+    // IM no acepta un cod_compatibilidad repetido: el de la factura original ya está usado.
+    expect(m.fa.mock.calls[0][0].origen_id).toBeNull();
+    expect(m.v2).not.toHaveBeenCalled(); expect(m.nd).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ ok: true, id: '59080001', tipo: 'FA B' });
+  });
+
+  it('🔴 el remito se marca con la factura COMPLEMENTARIA, no con la original', async () => {
+    await emitirComponente({ ...OP, indice: 2, resultados: [{ id: '999', tipo: 'NC B' }, FA_OK] } as any, { tipo: 'RE', datos: DATOS } as any);
+    expect(m.re).toHaveBeenCalledTimes(1);
+    expect(m.re.mock.calls[0][0].im_factura_id).toBe('59080001');
+  });
+
+  it('🔴 sin la factura registrada, el remito no sale', async () => {
+    const r = await emitirComponente({ ...OP, indice: 1, resultados: [] } as any, { tipo: 'RE', datos: DATOS } as any);
+    expect(r.ok).toBe(false);
+    expect(m.re).not.toHaveBeenCalled(); expect(m.masivo).not.toHaveBeenCalled();
+  });
+
+  it('🔑 si IM rechaza el remito por stock, sale igual por el masivo (como al facturar)', async () => {
+    m.re.mockResolvedValue({ ok: false, error: 'No hay stock suficiente [{"cod_articulo":332}]' });
+    const r = await emitirComponente({ ...OP, indice: 2, resultados: [FA_OK] } as any, { tipo: 'RE', datos: DATOS } as any);
+    expect(m.masivo).toHaveBeenCalledTimes(1);
+    expect(m.masivo.mock.calls[0][0].im_factura_id).toBe('59080001');
+    expect(r).toMatchObject({ ok: true, id: '59080003' });
+  });
+
+  it('🔴 pero si IM no contestó, NO reintenta por el masivo: sería un segundo remito', async () => {
+    m.re.mockResolvedValue({ ok: false, sinRespuesta: true, error: 'timeout' });
+    const r = await emitirComponente({ ...OP, indice: 2, resultados: [FA_OK] } as any, { tipo: 'RE', datos: DATOS } as any);
+    expect(m.masivo).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ ok: false, sinRespuesta: true });
   });
 });
 

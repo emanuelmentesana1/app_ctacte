@@ -97,7 +97,8 @@ export async function liquidacionMensual(req: Request & { user?: JwtPayload }, r
       // pago y un total elegido por orden de lectura es un pago elegido al azar.
       const notas = notasPorHoja.get(String(h.id)) ?? [];
       const nc = notas.filter(n => /^nc/i.test(String(n.tipo ?? ''))).reduce((s: number, n: any) => s + Math.abs(Number(n.total)), 0);
-      const nd = notas.filter(n => /^nd/i.test(String(n.tipo ?? ''))).reduce((s: number, n: any) => s + Math.abs(Number(n.total)), 0);
+      // La factura complementaria (opción C, 06/10/2026) suma como una ND.
+      const nd = notas.filter(n => /^(nd|fa\b)/i.test(String(n.tipo ?? ''))).reduce((s: number, n: any) => s + Math.abs(Number(n.total)), 0);
       const importe = despachado - nc + nd;
       const kg = pedidos.reduce((s: number, p: any) => s + Number(p.kg ?? 0), 0);
       const bultos = pedidos.reduce((s: number, p: any) => s + Number(p.bultos ?? 0), 0);

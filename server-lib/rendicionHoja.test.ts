@@ -74,6 +74,18 @@ describe('armarRendiciones — por cliente', () => {
         expect(f.estado).toBe('pago');
     });
 
+    /** 🔴 06/10/2026 — opción C: la factura complementaria por lo agregado sube lo entregado, como una ND. */
+    it('una factura complementaria sube lo entregado, como una ND', () => {
+        const r = base({
+            hojas: [hoja(3423, '2026-09-21', [pedido(101, 500_000, { notas: [{ tipo: 'NC B', total: 56_755.28 }, { tipo: 'FA B', total: 47_364.72 }] })])],
+            recibosIM: [efectivo(1, 101, '2026-09-21', 490_609.44)],
+        });
+        const f = r.hojas[0].filas[0];
+        expect(f.nd).toBe(47_364.72);
+        expect(f.entregado).toBe(490_609.44);
+        expect(f.estado).toBe('pago');
+    });
+
     it('🔄 06/10: el estado mira lo que el cliente debía (saldo anterior + entrega), no sólo la entrega', () => {
         // Antes: pagar 300.000 con una entrega de 100.000 decía "Pagó de más", aunque debía 250.000 de antes.
         const r = base({

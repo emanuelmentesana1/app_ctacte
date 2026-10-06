@@ -777,7 +777,7 @@ export function FacturacionView({ desde, hasta }: { desde: string; hasta: string
                                                     className={'fc-imprimir fc-nota ' + (/^NC/i.test(n.tipo) ? 'nc' : 'nd')}
                                                     title={`Imprimir la ${n.tipo} ${n.numero ?? ''} por ${money(n.total)}${n.motivo ? ` — ${n.motivo}` : ''}`}
                                                     onClick={() => imprimirComprobante(n.im_comprobante_id,
-                                                        /^NC/i.test(n.tipo) ? 'Nota de crédito' : 'Nota de débito')
+                                                        /^NC/i.test(n.tipo) ? 'Nota de crédito' : /^FA/i.test(n.tipo) ? 'Factura' : 'Nota de débito')
                                                         .catch(e => setError(e?.message ?? 'No se pudo imprimir'))}>
                                                 <Printer size={14} /> {n.tipo} {n.numero ?? ''}
                                             </button>

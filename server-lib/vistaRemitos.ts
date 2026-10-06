@@ -181,6 +181,15 @@ async function armarVistaRemitos(desde: string, hasta: string, forzar = false) {
     presupuestosPorRemito.get(remito)!.add(String(f.im_comprobante_id));
   }
   const ambiguos = new Set([...presupuestosPorRemito].filter(([, ids]) => ids.size > 1).map(([id]) => id));
+  /**
+   * 🔑 06/10/2026 — EL REMITO COMPLEMENTARIO DE UNA CORRECCIÓN (opción C de Mati) va con la entrega
+   * original: es mercadería que ya viajó en ese camión, no una entrega nueva para asignar.
+   * 🪤 Si la tabla todavía no existe (falta la 059) se sigue sin excluir nada: eso es lo de antes.
+   */
+  const complementarios = new Set((await enTandas<any>(t => sb().from('facturas_remitos_complementarios')
+    .select('im_remito_id').eq('tenant_id', TENANT_ID).in('im_remito_id', t))
+    .catch((e: any) => { console.warn('[vistaRemitos] sin remitos complementarios:', e?.message); return []; }))
+    .map((f: any) => String(f.im_remito_id)));
   // No asignar al azar la factura de un vínculo ambiguo ni ofrecérsela a otro remito.
   const facturasReservadas = new Set(nuestros.filter(f => ambiguos.has(String(f.im_remito_id)))
     .map(f => String(f.im_factura_id)).filter(id => id !== 'null' && id !== 'undefined'));
@@ -289,7 +298,7 @@ async function armarVistaRemitos(desde: string, hasta: string, forzar = false) {
   const sinVerificar = filas.filter((f: any) => !!f.importe_error);
   const verificadas = filas.filter((f: any) => !f.importe_error);
   const datos = {
-    pendientes: filas.filter(f => !f.hoja_id && !f.en_retiro && !f.asignacion_ambigua),
+    pendientes: filas.filter(f => !f.hoja_id && !f.en_retiro && !f.asignacion_ambigua && !complementarios.has(String(f.im_comprobante_id))),
     conflictos_asignacion: filas.filter(f => f.asignacion_ambigua),
     asignados: filas.filter(f => f.hoja_id),
     en_retiro: filas.filter(f => f.en_retiro).length,

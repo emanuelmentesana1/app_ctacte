@@ -127,6 +127,52 @@ try {
    await page.screenshot({path:`${out}/correccion-mismo-total.png`,fullPage:true});
   } finally {await ctx.close();}
  });
+ /** 🔴 06/10/2026 — opción C: lo agregado sale como factura complementaria + remito, y se ve antes de emitir. */
+ for (const width of [390, 1440]) await test(`Lo agregado se ve como factura complementaria con su remito (${width})`, async()=>{
+  const {page,ctx}=await setup(width);
+  try {
+   await page.route('**/api/facturacion?**',r=>reply(r,{pendientes:[],facturados:[{...rows[0],im_factura_id:'501',im_factura_numero:51218,im_factura_tipo:'FA B',notas:[]}],totales:{pendientes:0,facturados:1}}));
+   await page.route('**/api/facturacion/corregir/501',r=>reply(r,{factura:{id:'501',numero:51218,letra:'B',cliente_nombre:'RUIZ, María',fecha:'2026-10-03'},version:0,operacion:null,bloqueo_productos:null,
+     renglones:[{cod_articulo:320,descripcion:'BOLITAS DE CHOCOLATE x 2.5 Kg',cantidad:4,precio:14188.82,descuento_porc:0},{cod_articulo:332,descripcion:'CEREAL SIN AZUCAR X 2.5 KG',cantidad:4,precio:11841.18,descuento_porc:0}]}));
+   let enviado=null;
+   await page.route('**/api/facturacion/corregir',r=>{
+     const b=r.request().postDataJSON();
+     if(b.emitir){enviado=b;return reply(r,{ok:true,operacion:{id:b.operacion_id,estado:'completo',clase:'productos'},
+       emitidos:[{id:'1',tipo:'NC B',numero:30215,total:56755.28},{id:'2',tipo:'FA B',numero:51300,total:47364.72},{id:'3',tipo:'RE',numero:78700,total:47364.72}],fallados:[]});}
+     return reply(r,{ok:true,previsualizacion:true,letra:'B',version:0,
+       nc:[{cod_articulo:320,descripcion:'BOLITAS DE CHOCOLATE x 2.5 Kg',cantidad:4,precio:14188.82}],nd:[],
+       fa:[{cod_articulo:332,descripcion:'CEREAL SIN AZUCAR X 2.5 KG',cantidad:4,precio:11841.18}],
+       total_nc:56755.28,total_nd:0,total_fa:47364.72,diferencia:-9390.56});
+   });
+   await page.locator('.of-tabs button').filter({hasText:'Facturación'}).click();
+   await page.locator('.fc-facturados summary').click();
+   await page.getByRole('button',{name:'Editar',exact:true}).click();
+   await page.getByRole('button',{name:'Con notas (NC/ND)',exact:true}).click();
+   await page.locator('.cf-tabla').waitFor();
+   await page.locator('.cf-tabla tbody tr').nth(0).locator('input').nth(0).fill('0');
+   await page.locator('.cf-tabla tbody tr').nth(1).locator('input').nth(0).fill('8');
+   const resumen=page.locator('.cf-resumen');
+   await resumen.waitFor();
+   await resumen.getByText('Factura complementaria',{exact:false}).waitFor();
+   const texto=await resumen.innerText();
+   assert(/Factura complementaria B/.test(texto)&&/remito/.test(texto)&&/stock/.test(texto),`No muestra la factura complementaria con su remito: ${texto}`);
+   assert(!/Nota de débito/.test(texto),'Sigue ofreciendo una ND por lo agregado');
+   const caja=await resumen.boundingBox();
+   assert(caja&&caja.x>=-1&&caja.x+caja.width<=width+1,`El resumen se sale de la pantalla en ${width}`);
+   await page.screenshot({path:`${out}/factura-complementaria-${width}.png`,fullPage:true});
+   const boton=page.locator('.cf-pie .primario');
+   assert(await boton.isEnabled(),'Con sólo NC + factura complementaria no deja emitir');
+   let confirmacion='';
+   page.on('dialog',d=>{confirmacion=d.message();d.accept();});
+   await page.locator('.cf-motivo').fill('no se cargó bolitas según HR 3449');
+   await boton.click();
+   await page.locator('.cf-listo').waitFor();
+   assert(/factura complementaria/.test(confirmacion),`La confirmación no menciona la factura: ${confirmacion}`);
+   const listo=(await page.locator('.cf-listo').innerText()).replace(/\s+/g,' ');
+   assert(/FA B 51300/.test(listo)&&/remito RE 78700/.test(listo),`No dice qué salió: ${listo}`);
+   assert(!!enviado,'No envió la corrección');
+  } finally {await ctx.close();}
+ });
  await test('Emisión financiera conserva identificador y bloquea cierre mientras procesa', async()=>{
   const {page,ctx}=await setup();
   try {

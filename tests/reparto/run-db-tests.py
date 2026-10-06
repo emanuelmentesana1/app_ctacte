@@ -22,6 +22,7 @@ new = ['039_integridad_facturacion.sql', '040_integridad_reparto.sql', '041_inte
 # La lista es explícita: existen dos migraciones históricas con prefijo 035.
 new.append('055_pendientes_de_entrega.sql')
 new += ['057_estado_de_la_entrega.sql', '058_corregir_remito_de_la_entrega.sql']
+new.append('059_factura_complementaria.sql')
 bootstrap = '''CREATE ROLE service_role BYPASSRLS;
 CREATE ROLE anon;
 CREATE ROLE authenticated;
@@ -64,5 +65,6 @@ try:
     subprocess.run([sys.executable,str(tests/'db-cierre-importes.py'),container],check=True)
     subprocess.run([sys.executable,str(tests/'db-editar-factura.py'),container],check=True)
     subprocess.run([sys.executable,str(tests/'db-corregir-remito.py'),container],check=True)
+    subprocess.run([sys.executable,str(tests/'db-factura-complementaria.py'),container],check=True)
 finally:
     subprocess.run(['docker','stop','--time','5',container],stdout=subprocess.DEVNULL,check=False)
