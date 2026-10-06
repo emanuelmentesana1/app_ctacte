@@ -261,20 +261,19 @@ describe('saldo del mes por repartidor', () => {
 });
 
 describe('piloto (Mati, 05/10/2026: "sí al piloto" con una hoja)', () => {
-  it('🔑 por defecto el piloto es la 3449 más las tres del 06/10 (Mati, 06/10: opción 2); la 3450 no emite', async () => {
+  it('🔑 por defecto el piloto son la 3449, la 3450 y las tres del 06/10 (Mati, 06/10); otra hoja no emite', async () => {
     delete process.env.RENDICION_PILOTO_HOJAS;
     const r = res();
     await rendicionDeHoja(req(ANTO), r);
-    expect(r.body.emision.piloto).toEqual([3449, 3451, 3452, 3453]);
+    expect(r.body.emision.piloto).toEqual([3449, 3450, 3451, 3452, 3453]);
     expect(r.body.emision.tope).toBeGreaterThan(0);
-    m.tablas.hojas_ruta[1].numero = 3453;
-    const r53 = res();
-    await rendicionDeHoja(req(ANTO, {}, { params: { id: HOJA_FUERA } }), r53);
-    expect(r53.body.emision.tope).toBeGreaterThan(0);
-    m.tablas.hojas_ruta[1].numero = 3450;
     const r50 = res();
     await rendicionDeHoja(req(ANTO, {}, { params: { id: HOJA_FUERA } }), r50);
-    expect(r50.body.emision.tope).toBe(0);
+    expect(r50.body.emision.tope).toBeGreaterThan(0);
+    m.tablas.hojas_ruta[1].numero = 3454;
+    const r54 = res();
+    await rendicionDeHoja(req(ANTO, {}, { params: { id: HOJA_FUERA } }), r54);
+    expect(r54.body.emision.tope).toBe(0);
   });
 
   it('🔴 una hoja fuera del piloto no emite, aunque tenga su rendición guardada', async () => {
