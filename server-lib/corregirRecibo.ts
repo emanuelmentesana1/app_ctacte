@@ -128,7 +128,8 @@ async function anularYReemitir(res: Response, user: JwtPayload, comp: Comp, camb
         console.error(`[corregir] ${user.sub}: anulado ${numero} (${idIM}) SIN reemplazo: ${motivo}`);
         res.status(502).json({ error: texto });
     };
-    const real = await armarReemision(comp, cambios, releido!, cuentaNueva, true);
+    // 🪤 Las facturas que pagaba salen del detalle de ANTES de anular: el anulado puede venir sin ellas. La deuda, de IM ahora.
+    const real = await armarReemision(comp, cambios, im, cuentaNueva, true);
     if ('error' in real) { await fallar(real.error); return; }
     const comprobantes = real.nuevo.facturas.map(f => ({ id: f.id, importe_a_pagar: f.importe.toFixed(2) }));
     const ajuste = ajustarImputacionIM(real.nuevo.monto, comprobantes.map(c => Number(c.importe_a_pagar)));

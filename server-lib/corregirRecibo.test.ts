@@ -240,6 +240,15 @@ describe('Corregir en IM — monto, cliente o fecha: anular y reemitir (tanda 2)
     expect(m.tablas.recibos_correcciones[0]).toMatchObject({ tipo: 'anular_reemitir', estado: 'hecha', despues: { numero: '30156500', id: '59100001', monto: 418_768 } });
   });
 
+  it('🪤 si IM5 borra las facturas del recibo anulado, el nuevo igual va primero a las que pagaba (no a la deuda más vieja)', async () => {
+    m.comprobante.mockReset().mockResolvedValueOnce(detalle('1120003')).mockResolvedValueOnce({ ...anulado(), rc_comprobantes: [] });
+    m.pendientes.mockReset().mockResolvedValueOnce([{ id: 58997783, saldo: 49.3, fecha_factura: '2026-09-30' }])
+      .mockResolvedValue([{ id: 57000001, saldo: 500_000, fecha_factura: '2026-08-01' }, { id: 58997783, saldo: 418_768.3, fecha_factura: '2026-09-30' }]);
+    const r = await corregir(MATI, { accion: 'corregir', cambios: { monto: 418_768 } });
+    expect(r.statusCode).toBe(200);
+    expect(m.crear.mock.calls[0][0].comprobantes).toEqual([{ id: '58997783', importe_a_pagar: '418768.00' }]);
+  });
+
   it('🔴 si IM5 no anula, no se emite nada y la app no cambia', async () => {
     m.anular.mockReset().mockRejectedValue(new ErrorIM5('IM5 rechazó el pedido (400: No se puede anular).', 502));
     const r = await corregir(MATI, { accion: 'corregir', cambios: { monto: 418_768 } });
