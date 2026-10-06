@@ -232,17 +232,22 @@ export async function arrastreDelDia(req: Request & { user?: JwtPayload }, res: 
     const tandas: string[][] = [];
     for (let i = 0; i < ids.length; i += 200) tandas.push(ids.slice(i, i + 200));
     await Promise.all(tandas.map(async tanda => {
-      const [{ data: asignados, error: errAsignados }, { data: retiros, error: errRetiros }] = await Promise.all([
+      const [{ data: asignados, error: errAsignados }, { data: retiros, error: errRetiros }, complementos] = await Promise.all([
         // Los que ya están en una hoja no son arrastre: alguien se ocupó.
         sb().from('hojas_ruta_pedidos')
           .select('im_comprobante_id,hojas_ruta!inner(tenant_id)').eq('hojas_ruta.tenant_id', TENANT_ID).in('im_comprobante_id', tanda),
         // Ni los que el cliente pasa a buscar: ésos tampoco esperan un camión.
         sb().from('retiros_sucursal').select('im_comprobante_id').eq('tenant_id', TENANT_ID).in('im_comprobante_id', tanda),
+        // Ni el remito complementario de una corrección (opción C, 06/10/2026): va con la entrega
+        // original. 🪤 Sin la migración 059 la tabla no existe y se sigue como antes.
+        sb().from('facturas_remitos_complementarios').select('im_remito_id').eq('tenant_id', TENANT_ID).in('im_remito_id', tanda),
       ]);
       if (errAsignados) throw new Error(errAsignados.message);
       if (errRetiros) throw new Error(errRetiros.message);
       for (const a of asignados ?? []) yaEn.add(String((a as any).im_comprobante_id));
       for (const r of retiros ?? []) yaEn.add(String((r as any).im_comprobante_id));
+      if (complementos.error) console.warn('[arrastreDelDia] sin remitos complementarios:', complementos.error.message);
+      for (const c of complementos.data ?? []) yaEn.add(String((c as any).im_remito_id));
     }));
     const sueltos = previos.filter((p: any) => !alias.get(String(p.id))!.some(id => yaEn.has(id)));
     const porFecha: Record<string, number> = {};

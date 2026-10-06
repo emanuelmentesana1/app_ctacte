@@ -215,4 +215,21 @@ describe('arrastre', () => {
       if (anterior === undefined) delete process.env.HOJAS_RUTA_DESDE; else process.env.HOJAS_RUTA_DESDE = anterior;
     }
   });
+
+  /** 🔴 06/10/2026 — opción C: el remito complementario va con la entrega original, no es arrastre. */
+  it('🔴 un remito complementario no cuenta como arrastre', async () => {
+    const anterior = process.env.HOJAS_RUTA_DESDE;
+    process.env.HOJAS_RUTA_DESDE = 'todo';
+    try {
+      vi.mocked(fetchVentas).mockResolvedValue([
+        { id: '7', tipo_comprobante: 'RE', cod_empresa: 1, anulada: 'N', fecha: '2026-09-17' },
+      ] as any);
+      tablas = { facturas_remitos_complementarios: { data: [{ im_remito_id: '7' }], error: null } };
+      // refrescar: el arrastre guarda lo leído de IM 10 minutos y el test anterior ya lo llenó.
+      const r = await llamar(arrastreDelDia, { query: { desde: '2026-09-20', hasta: '2026-09-20', refrescar: '1' } });
+      expect(r.body.cantidad).toBe(0);
+    } finally {
+      if (anterior === undefined) delete process.env.HOJAS_RUTA_DESDE; else process.env.HOJAS_RUTA_DESDE = anterior;
+    }
+  });
 });

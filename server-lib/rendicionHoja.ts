@@ -289,7 +289,8 @@ export function armarRendiciones(e: EntradaRendicion): { hojas: HojaRendicion[];
             const notas = salieron.flatMap(p => p.notas ?? []);
             const nc = centavos(notas.filter(n => esTipo(n.tipo, 'NC')).reduce((s, n) => s + Math.abs(Number(n.total) || 0), 0));
             // La factura complementaria (opción C, 06/10/2026) sube lo entregado, como una ND.
-            const nd = centavos(notas.filter(n => esTipo(n.tipo, 'ND') || esTipo(n.tipo, 'FA')).reduce((s, n) => s + Math.abs(Number(n.total) || 0), 0));
+            // Mismo criterio que la Liquidación (/^(nd|fa\b)/), para que las dos den el mismo entregado.
+            const nd = centavos(notas.filter(n => esTipo(n.tipo, 'ND') || /^fa\b/i.test(String(n.tipo ?? ''))).reduce((s, n) => s + Math.abs(Number(n.total) || 0), 0));
             const entregado = centavos(llevo - nc + nd);
             const recibos = asignados.get(`${h.id}|${cod}`) ?? [];
             const efectivo = centavos(recibos.reduce((s, r) => s + efectivoDe(r), 0));
