@@ -12,7 +12,7 @@ import { resolveCuentaCod, debugCuentasResolver, invalidateCuentasCache, listCue
 import { buscarPagoEnMP, todayISO_AR, mpConfigStatus, type MPMatch, type MPCuenta } from './mercadopago.js';
 import { ajustarImputacionIM, validarContraPendientes } from './recibosImputacion.js';
 import { CADUCADO_PREFIX, parseMontoUpload, lecturaDelCelular } from './recibosShared.js';
-import { usuarioIMDelAprobador, esRechazoPorUsuario } from './usuarioReciboIM.js';
+import { usuarioIMDelAprobador, cajaDelAprobador, esRechazoPorUsuario } from './usuarioReciboIM.js';
 import { registrarTiempo } from './tiempos.js';
 import type { JwtPayload } from './auth.js';
 
@@ -902,6 +902,13 @@ export async function cuentasEfectivo(req: Request & { user?: JwtPayload }, res:
     const user = req.user!;
     if (!puedeRevisarRecibos(user.rol)) { res.status(403).json({ error: 'Requiere admin, gerente o administrativo' }); return; }
     const cuentas = await listCuentasEfectivo();
+    // Quien tiene caja propia en IM la encuentra elegida (Jorgelina → Caja Chica 2, Mati 06/10/2026). Si esa
+    // caja no está habilitada, queda la de siempre.
+    const propia = cajaDelAprobador(await filaUsuario(user))?.cuenta;
+    if (propia && cuentas.some(c => String(c.cod_cuenta) === propia)) {
+      res.json({ ok: true, cuentas: cuentas.map(c => ({ ...c, es_default: String(c.cod_cuenta) === propia })) });
+      return;
+    }
     res.json({ ok: true, cuentas });
   } catch (err: any) {
     res.status(500).json({ error: err?.message ?? 'error' });

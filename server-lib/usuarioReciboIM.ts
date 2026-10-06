@@ -9,8 +9,26 @@
  * en `usuarios.im_usuario` (migración 026; Anto = "anto") y Pedidos lo usa igual.
  */
 
-/** El login de IM de quien aprueba; si no lo tiene cargado, el de la app. */
+/**
+ * Quien cobra con una caja propia en IM. Mati (06/10/2026): lo que aprueba Jorgelina tiene que salir con
+ * "CONY CAJA", su usuario de caja, para que le impacte en su caja y pueda hacer sus rendiciones. En IM,
+ * CONY CAJA es quien carga los recibos de la Caja Chica 2 (verificado el 06/10 en una muestra de recibos).
+ * 🪤 Va aparte de `usuarios.im_usuario`: "jorgelina" también lo usan facturar, editar facturas y las notas,
+ * y ahí IM exige un usuario con el punto de venta vinculado.
+ */
+const CAJA_PROPIA: Record<string, { usuario: string; cuenta: string }> = {
+    jorgelina: { usuario: 'CONY CAJA', cuenta: '1110004' },
+};
+
+/** El usuario de caja y la cuenta de efectivo propios de quien aprueba; null si no tiene. */
+export function cajaDelAprobador(fila: { im_usuario?: string | null } | null | undefined): { usuario: string; cuenta: string } | null {
+    return CAJA_PROPIA[String(fila?.im_usuario ?? '').trim()] ?? null;
+}
+
+/** El login de IM de quien aprueba (su usuario de caja, si tiene); si no lo tiene cargado, el de la app. */
 export function usuarioIMDelAprobador(fila: { im_usuario?: string | null } | null | undefined, porDefecto: string): string {
+    const caja = cajaDelAprobador(fila);
+    if (caja) return caja.usuario;
     const propio = String(fila?.im_usuario ?? '').trim();
     return propio || porDefecto;
 }

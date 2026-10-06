@@ -47,7 +47,7 @@ vi.mock('./supabase.js', () => ({
 }));
 
 process.env.INFOMANAGER_USUARIO = 'matias';
-const { aprobarRecibo } = await import('./recibos.js');
+const { aprobarRecibo, cuentasEfectivo } = await import('./recibos.js');
 
 const PENDIENTE = { id: 'FA1', saldo: 300_000, tipo_comprobante: 'FA' };
 function req(body: Record<string, unknown> = {}, rol = 'administrativo') {
@@ -137,6 +137,31 @@ describe('aprobarRecibo — usuario de IM de quien aprueba (S32 · mejora 5)', (
     m.crearRecibo.mockResolvedValue({ ok: true, id: '1', raw: {} });
     await aprobarRecibo(req({ usuario: 'otro_usuario' }), res());
     expect(m.crearRecibo.mock.calls[0][0].usuario).toBe('anto');
+  });
+});
+
+describe('la caja de Jorgelina (Mati, 06/10/2026: "que le impacte en su caja")', () => {
+  const JO = { im_usuario: 'jorgelina', cod_empresa: null, ve_todos_los_clientes: false, ve_toda_la_empresa: false };
+
+  it('🔑 lo que aprueba Jorgelina entra a IM con CONY CAJA, no con "jorgelina" ni con el de la app', async () => {
+    m.filaUsuario.mockResolvedValue(JO);
+    m.crearRecibo.mockResolvedValue({ ok: true, id: '1', raw: {} });
+    await aprobarRecibo(req(), res());
+    expect(m.crearRecibo.mock.calls[0][0].usuario).toBe('CONY CAJA');
+    expect(m.crearRecibo.mock.calls[0][0].pagos[0].cod_cuenta).toBe('1120003');
+  });
+
+  it('en efectivo, a ella le viene elegida la Caja Chica 2 (su caja en IM)', async () => {
+    m.filaUsuario.mockResolvedValue(JO);
+    const r = res();
+    await cuentasEfectivo(req(), r);
+    expect(r.body.cuentas.filter((c: any) => c.es_default).map((c: any) => c.cod_cuenta)).toEqual(['1110004']);
+  });
+
+  it('a Anto le sigue viniendo elegida la de siempre', async () => {
+    const r = res();
+    await cuentasEfectivo(req(), r);
+    expect(r.body.cuentas.filter((c: any) => c.es_default).map((c: any) => c.cod_cuenta)).toEqual(['1110005']);
   });
 });
 
