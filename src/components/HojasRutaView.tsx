@@ -11,6 +11,7 @@ import { authHeaders, getUser } from '../utils/auth';
 import { coincide } from '../utils/buscar';
 import { useRecargarAlVolver } from '../utils/recargarAlVolver';
 import { ImprimirHoja } from './ImprimirHoja';
+import { CierreHoja } from './HojaRendida';
 import { AjustesHojaModal } from './AjustesHojaModal';
 import { AvisoTemporal } from './AvisoTemporal';
 import { InformesOficina, type SeccionInforme } from './InformesOficina';
@@ -202,6 +203,8 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
     const [panel, setPanel] = useState<'pedidos' | 'hojas'>(hojaEnlace ? 'hojas' : 'pedidos');
     /** Qué hoja se está imprimiendo. */
     const [imprimiendo, setImprimiendo] = useState<string | null>(null);
+    /** La hoja que se está por cerrar: primero se ve su resumen (06/10/2026). */
+    const [porCerrar, setPorCerrar] = useState<Hoja | null>(null);
     /** Qué hoja tiene abierto el panel de diferencias de entrega (notas de crédito). */
     const [ajustando, setAjustando] = useState<Hoja | null>(null);
     /**
@@ -643,12 +646,14 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
         const cerrando = h.estado !== 'cerrada';
         if (cerrando) {
             if (!h.chofer_id) { setAviso(`Asignale un chofer a la hoja ${h.numero} antes de cerrarla: es a quien se le liquida.`); return; }
-            if (!confirm(`¿Cerrar la hoja ${h.numero}?\n\nEntra en la liquidación de ${h.chofer ?? 'el chofer'} y ya no se le pueden agregar ni sacar pedidos.`)) return;
+            // 🔄 Mati (06/10/2026): antes de cerrar se ve TODA la info de la hoja (cobrado, recibos, gastos, contado,
+            // quién contó y controló). Se confirma en ese resumen (`CierreHoja`), no en un confirm().
+            setPorCerrar(h);
+            return;
         } else if (!confirm(`¿Reabrir la hoja ${h.numero}?\n\nSale de la liquidación del mes hasta que se vuelva a cerrar.`)) {
             return;
         }
-        await editarHoja(h.id, { estado: cerrando ? 'cerrada' : 'abierta' },
-            cerrando ? 'No se pudo cerrar la hoja' : 'No se pudo reabrir la hoja');
+        await editarHoja(h.id, { estado: 'abierta' }, 'No se pudo reabrir la hoja');
     }
 
     /**
@@ -1221,6 +1226,10 @@ export function HojasRutaView({ desde, hasta }: { desde: string; hasta: string }
             </div>
 
             {imprimiendo && <ImprimirHoja hojaId={imprimiendo} onClose={() => setImprimiendo(null)} />}
+            {porCerrar && (
+                <CierreHoja hojaId={porCerrar.id} numero={porCerrar.numero} chofer={porCerrar.chofer ?? null} onCancelar={() => setPorCerrar(null)}
+                    onConfirmar={() => { const h = porCerrar; setPorCerrar(null); void editarHoja(h.id, { estado: 'cerrada' }, 'No se pudo cerrar la hoja'); }} />
+            )}
             <AvisoTemporal texto={info} onCerrar={() => setInfo(null)} />
             {verInformes && <InformesOficina titulo="Informes del rango" secciones={informes} onCerrar={() => setVerInformes(false)} />}
 

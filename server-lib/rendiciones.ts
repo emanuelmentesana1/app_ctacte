@@ -19,6 +19,7 @@ import { leerPaginas, enriquecerHojas, notasDeHojas, entregaNoSalio } from './re
 import { imClient, imGetRetry, fechaArgentina } from './infomanager.js';
 import { getV2, imV2Configurada } from './imApiV2.js';
 import { armarRendiciones, type HojaIn, type ReciboIMIn, type MovMayorIn, type TransferenciaIn } from './rendicionHoja.js';
+import { armarResumenHoja, type ReciboAppIn, type RendicionAppIn } from './resumenHoja.js';
 
 /** Caja Repartos en el plan de cuentas de IM (empresa 1). */
 const CUENTA_CAJA_REPARTOS = process.env.IM_CUENTA_CAJA_REPARTOS || '1110009';
@@ -64,24 +65,22 @@ async function mayorCaja(desde: string, hasta: string): Promise<MovMayorIn[]> {
   return (Array.isArray(data) ? data : (data?.results ?? [])) as MovMayorIn[];
 }
 
-export async function rendicionesDelRango(req: Request & { user?: JwtPayload }, res: Response) {
-  if (!puedeArmarHojasDeRuta(String(req.user?.rol ?? ''))) { res.status(403).json({ error: 'Esto lo ve administración.' }); return; }
-  const desde = String(req.query.desde ?? '').slice(0, 10);
-  const hasta = String(req.query.hasta ?? '').slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta) || hasta < desde) {
-    res.status(400).json({ error: 'Rango inválido: mandá desde y hasta (AAAA-MM-DD).' }); return;
-  }
-  if (diasEntre(desde, hasta) > MAX_DIAS) { res.status(400).json({ error: `El rango no puede pasar de ${MAX_DIAS} días.` }); return; }
-  const refrescar = req.query.refrescar === '1';
+/** Un error con el código HTTP que corresponde (IM sin configurar, IM que no contesta). */
+class ErrorRendiciones extends Error {
+  constructor(mensaje: string, public status: number) { super(mensaje); }
+}
 
-  try {
+/**
+ * La cuenta de las hojas del rango, sin el `res`: la usan esta pantalla y el resumen de una hoja
+ * (`resumenHoja.ts`), así las dos dan lo mismo.
+ */
+export async function calcularRendiciones(desde: string, hasta: string, refrescar: boolean) {
     const hojas: FilaHoja[] = await leerPaginas(() => sb().from('hojas_ruta')
       .select('id, numero, fecha, estado, cierres_importes, chofer_id, nombre, choferes(nombre), hojas_ruta_pedidos(*)')
       .eq('tenant_id', TENANT_ID).gte('fecha', desde).lte('fecha', hasta).neq('estado', 'anulada')
       .order('fecha').order('numero'));
     if (!hojas.length) {
-      res.json({ ok: true, desde, hasta, hojas: [], asientos: [], fuera_de_hoja: [], consultado: { im_recibos: true, im_mayor: true } });
-      return;
+      return { desde, hasta, hojas: [] as ReturnType<typeof armarRendiciones>['hojas'], asientos: [] as ReturnType<typeof armarRendiciones>['asientos'], fuera_de_hoja: [] as ReturnType<typeof armarRendiciones>['fuera_de_hoja'], consultado: { im_recibos: true, im_mayor: true } };
     }
 
     // Los mismos importes que la Liquidación: vivos en las abiertas, congelados al cierre en las cerradas.
@@ -104,13 +103,13 @@ export async function rendicionesDelRango(req: Request & { user?: JwtPayload }, 
     // IM: el efectivo se carga con la fecha de la hoja; el asiento sale uno a tres días después.
     const hoy = fechaArgentina();
     const finMayor = sumarDias(hasta, 5) < hoy ? sumarDias(hasta, 5) : hoy;
-    if (!imV2Configurada()) { res.status(503).json({ error: 'Falta configurar la API nueva de InfoManager: no puedo leer los recibos.' }); return; }
+    if (!imV2Configurada()) throw new ErrorRendiciones('Falta configurar la API nueva de InfoManager: no puedo leer los recibos.', 503);
     let recibos: ReciboIMIn[];
     try {
       recibos = await conCache(`rec|${desde}|${hasta}`, refrescar, () => recibosIM(sumarDias(desde, -1), sumarDias(hasta, 1)));
     } catch (e) {
       // Sin los recibos, la pantalla diría "no cobró" a todos: es preferible un error claro.
-      res.status(502).json({ error: `InfoManager no devolvió los recibos (${e instanceof Error ? e.message : String(e)}). Probá en unos minutos.` }); return;
+      throw new ErrorRendiciones(`InfoManager no devolvió los recibos (${e instanceof Error ? e.message : String(e)}). Probá en unos minutos.`, 502);
     }
     let mayor: MovMayorIn[] = [];
     let mayorOk = true;
@@ -145,10 +144,73 @@ export async function rendicionesDelRango(req: Request & { user?: JwtPayload }, 
       .select('hoja_id, efectivo, gastos, efectivo_contado, diferencia, contado_at, controlado_at')
       .eq('tenant_id', TENANT_ID).in('hoja_id', hojas.map(h => String(h.id)));
     if (errApp && !['42P01', 'PGRST205'].includes(String(errApp.code))) console.warn(`[rendiciones] rendiciones de la app: ${errApp.message}`);
-    res.json({ ok: true, desde, hasta, ...r, rendiciones_app: errApp ? null : (enApp ?? []), consultado: { im_recibos: true, im_mayor: mayorOk } });
+    return { desde, hasta, ...r, rendiciones_app: errApp ? null : (enApp ?? []), consultado: { im_recibos: true, im_mayor: mayorOk } };
+}
+
+export async function rendicionesDelRango(req: Request & { user?: JwtPayload }, res: Response) {
+  if (!puedeArmarHojasDeRuta(String(req.user?.rol ?? ''))) { res.status(403).json({ error: 'Esto lo ve administración.' }); return; }
+  const desde = String(req.query.desde ?? '').slice(0, 10);
+  const hasta = String(req.query.hasta ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta) || hasta < desde) {
+    res.status(400).json({ error: 'Rango inválido: mandá desde y hasta (AAAA-MM-DD).' }); return;
+  }
+  if (diasEntre(desde, hasta) > MAX_DIAS) { res.status(400).json({ error: `El rango no puede pasar de ${MAX_DIAS} días.` }); return; }
+  try {
+    res.json({ ok: true, ...(await calcularRendiciones(desde, hasta, req.query.refrescar === '1')) });
   } catch (err) {
     const e = err as { message?: string; status?: number };
     console.error('[rendiciones]', e?.message);
+    res.status(Number.isInteger(e?.status) ? Number(e.status) : 500).json({ error: e?.message ?? 'error' });
+  }
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * GET /api/rendiciones/hoja/:id/resumen — todo lo de UNA hoja para imprimirla con los recibos y para cerrarla
+ * (Mati, 06/10/2026). Sólo lectura. La cuenta sale de `calcularRendiciones` con todas las hojas del día, así da lo
+ * mismo que esta pantalla; el armado es puro (`resumenHoja.ts`).
+ */
+export async function resumenDeHoja(req: Request & { user?: JwtPayload }, res: Response) {
+  if (!puedeArmarHojasDeRuta(String(req.user?.rol ?? ''))) { res.status(403).json({ error: 'Esto lo ve administración.' }); return; }
+  const id = String(req.params.id ?? '');
+  if (!UUID.test(id)) { res.status(400).json({ error: 'Hoja inválida.' }); return; }
+  try {
+    const { data: fila, error } = await sb().from('hojas_ruta').select('id, fecha').eq('tenant_id', TENANT_ID).eq('id', id).maybeSingle();
+    if (error) throw new Error(`No pude leer la hoja: ${error.message}`);
+    if (!fila) { res.status(404).json({ error: 'No existe esa hoja de ruta.' }); return; }
+    const fecha = String(fila.fecha).slice(0, 10);
+    const dia = await calcularRendiciones(fecha, fecha, req.query.refrescar === '1');
+    const hoja = dia.hojas.find(h => h.id === id);
+    if (!hoja) { res.status(404).json({ error: 'La hoja está anulada.' }); return; }
+
+    // A qué facturas fue cada recibo: lo que devolvió IM cuando la app lo emitió.
+    const idsIM = hoja.filas.flatMap(f => f.recibos_efectivo.map(r => String(r.id_recibo)));
+    const idsApp = hoja.filas.flatMap(f => f.transferencias.map(t => t.id));
+    const recibosApp: ReciboAppIn[] = [];
+    for (const [col, ids] of [['infomanager_recibo_id', idsIM], ['id', idsApp]] as const) {
+      if (!ids.length) continue;
+      const { data, error: e } = await sb().from('comprobantes_pago').select('id, infomanager_recibo_id, status, medio_pago, infomanager_response')
+        .eq('tenant_id', TENANT_ID).in(col, ids);
+      if (e) throw new Error(`No pude leer los recibos de la app: ${e.message}`);
+      recibosApp.push(...((data ?? []) as ReciboAppIn[]));
+    }
+
+    // Sin la migración 056 no hay rendición en la app: el resumen sale igual, con lo de IM.
+    const { data: rend, error: errRend } = await sb().from('rendiciones')
+      .select('efectivo, gastos, efectivo_contado, contado_por, contado_at, controlado_por, controlado_at')
+      .eq('tenant_id', TENANT_ID).eq('hoja_id', id).maybeSingle();
+    if (errRend && !['42P01', 'PGRST205'].includes(String(errRend.code))) throw new Error(`No pude leer la rendición: ${errRend.message}`);
+    const quienes = [rend?.contado_por, rend?.controlado_por].filter((x): x is string => !!x);
+    const nombres = new Map<string, string>();
+    if (quienes.length) {
+      const { data: us } = await sb().from('usuarios').select('id, nombre').in('id', quienes);
+      for (const u of (us ?? []) as Array<{ id: string; nombre: string | null }>) nombres.set(String(u.id), u.nombre ?? 'otra persona');
+    }
+    res.json({ ok: true, ...armarResumenHoja({ hoja, recibosApp, rendicion: (rend as RendicionAppIn | null) ?? null, nombres }), consultado: dia.consultado });
+  } catch (err) {
+    const e = err as { message?: string; status?: number };
+    console.error('[resumen hoja]', e?.message);
     res.status(Number.isInteger(e?.status) ? Number(e.status) : 500).json({ error: e?.message ?? 'error' });
   }
 }

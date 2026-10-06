@@ -3,6 +3,7 @@ import { Loader2, AlertTriangle, RefreshCw, Banknote, CheckCircle2, Info, Copy, 
 import { authHeaders } from '../utils/auth';
 import { useLecturaVigente } from '../utils/useLecturaVigente';
 import { resumenParaIM } from '../utils/rendicionCuentas';
+import { ESTADO_COBRO as ESTADO, type EstadoCobro as Estado } from '../utils/estadoCobro';
 import { RendirHoja, type RendicionApp } from './RendirHoja';
 import './RendicionesView.css';
 
@@ -21,7 +22,6 @@ import './RendicionesView.css';
  * frena; lo informativo va a un ⓘ, con una línea corta y el detalle en el `title`.
  */
 
-type Estado = 'pago' | 'entrega' | 'deuda_vieja' | 'parcial' | 'de_mas' | 'sin_cobro' | 'no_salio';
 interface Fila {
     cod_cliente: number; cliente: string; llevo: number; nc: number; nd: number; entregado: number; saldo_anterior: number;
     efectivo: number; recibos_efectivo: { id_recibo: string; numero: string | null; fecha: string; importe: number }[];
@@ -53,15 +53,6 @@ const ddmm = (iso: string) => iso.slice(0, 10).split('-').reverse().slice(0, 2).
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const diaLargo = (iso: string) => `${DIAS[new Date(`${iso}T12:00:00Z`).getUTCDay()]} ${ddmm(iso)}`;
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-const ESTADO: Record<Estado, { texto: string; clase: string }> = {
-    pago: { texto: 'Pagó todo', clase: 'ok' },
-    entrega: { texto: 'Pagó la entrega', clase: 'ok' },
-    deuda_vieja: { texto: 'Pagó la deuda vieja', clase: 'ok' },
-    parcial: { texto: 'Pagó parte', clase: 'ambar' },
-    de_mas: { texto: 'Pagó de más', clase: 'verde' },
-    sin_cobro: { texto: 'Sin cobro', clase: 'rojo' },
-    no_salio: { texto: 'No salió', clase: 'gris' },
-};
 
 export function RendicionesView({ desde, hasta }: { desde: string; hasta: string }) {
     const [datos, setDatos] = useState<Respuesta | null>(null);

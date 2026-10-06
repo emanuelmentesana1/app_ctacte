@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Printer, Loader2, AlertTriangle } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
+import { HojaRendida } from './HojaRendida';
 import './ImprimirHoja.css';
 
 /**
@@ -15,6 +16,9 @@ import './ImprimirHoja.css';
  *
  *  2. **El listado de fraccionado**, sólo lo que se vende por kilo, agrupado por producto y con
  *     cada cantidad separada: cada una es un paquete a preparar.
+ *
+ *  3. **La hoja con los recibos** (Mati, 06/10/2026): lo cobrado a cada cliente, con qué recibo y a qué
+ *     facturas fue, y la rendición del efectivo (`HojaRendida`).
  */
 
 interface Comprobante {
@@ -50,7 +54,8 @@ const fechaCorta = (iso: string) => iso ? iso.slice(0, 10).split('-').reverse().
 export function ImprimirHoja({ hojaId, onClose }: { hojaId: string; onClose: () => void }) {
     const [datos, setDatos] = useState<Datos | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [que, setQue] = useState<'ruta' | 'fraccionado'>('ruta');
+    const [que, setQue] = useState<'ruta' | 'fraccionado' | 'recibos'>('ruta');
+    const [recibosListos, setRecibosListos] = useState(false);
 
     // Mientras esta vista está abierta, el navegador imprime SOLO esto (ver el @media print
     // del css). Sin esto salen también el header y el panel de atrás.
@@ -78,15 +83,17 @@ export function ImprimirHoja({ hojaId, onClose }: { hojaId: string; onClose: () 
                 <div className="imp-tabs">
                     <button className={que === 'ruta' ? 'on' : ''} onClick={() => setQue('ruta')}>Hoja de ruta</button>
                     <button className={que === 'fraccionado' ? 'on' : ''} onClick={() => setQue('fraccionado')}>Fraccionado</button>
+                    <button className={que === 'recibos' ? 'on' : ''} onClick={() => setQue('recibos')}>Con los recibos</button>
                 </div>
-                <button className="imp-btn" onClick={() => window.print()} disabled={!datos || !!error || (que === 'fraccionado' && datos.fraccionado_completo !== true)}>
+                <button className="imp-btn" onClick={() => window.print()} disabled={que === 'recibos' ? !recibosListos : (!datos || !!error || (que === 'fraccionado' && datos.fraccionado_completo !== true))}>
                     <Printer size={15} /> Imprimir
                 </button>
                 <button className="imp-cerrar" onClick={onClose}><X size={18} /></button>
             </div>
 
-            {!datos && !error && <div className="imp-cargando"><Loader2 className="spin" size={22} /> Armando el impreso…</div>}
-            {error && <div className="imp-error"><AlertTriangle size={16} /> {error}</div>}
+            {que !== 'recibos' && !datos && !error && <div className="imp-cargando"><Loader2 className="spin" size={22} /> Armando el impreso…</div>}
+            {que !== 'recibos' && error && <div className="imp-error"><AlertTriangle size={16} /> {error}</div>}
+            {que === 'recibos' && <HojaRendida hojaId={hojaId} onCargado={r => setRecibosListos(!!r)} />}
 
             {datos && que === 'ruta' && (
                 <div className="imp-hoja">

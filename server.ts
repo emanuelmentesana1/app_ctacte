@@ -71,7 +71,7 @@ import { editarFactura } from './server-lib/editarFactura.js';
 import { compararFacturaConRemito } from './server-lib/compararComprobantes.js';
 import { marcarRetiro, quitarRetiro, marcarRetirado, listarRetiros, resumenRetiros } from './server-lib/retirosSucursal.js';
 import { listarChoferes, liquidacionMensual } from './server-lib/liquidacionChoferes.js';
-import { rendicionesDelRango } from './server-lib/rendiciones.js';
+import { rendicionesDelRango, resumenDeHoja } from './server-lib/rendiciones.js';
 import { rendicionDeHoja, guardarRendicion, controlarRendicion, emitirRendicion, saldosDelMes } from './server-lib/rendirHoja.js';
 import { listarAjustes, crearAjuste, borrarAjuste, candidatasAVincular, vincularAjuste } from './server-lib/ajustesEntrega.js';
 import { anularPresupuesto } from './server-lib/anularPresupuesto.js';
@@ -724,6 +724,8 @@ app.get('/api/rendiciones/hoja/:id', requireJwt, (req: any, res) => rendicionDeH
 app.put('/api/rendiciones/hoja/:id', requireJwt, (req: any, res) => guardarRendicion(req, res));
 app.post('/api/rendiciones/hoja/:id/controlar', requireJwt, (req: any, res) => controlarRendicion(req, res));
 app.post('/api/rendiciones/hoja/:id/emitir', requireJwt, (req: any, res) => emitirRendicion(req, res));
+// Todo lo de una hoja para imprimirla con los recibos y para cerrarla (Mati, 06/10/2026). Sólo lectura.
+app.get('/api/rendiciones/hoja/:id/resumen', requireJwt, (req: any, res) => resumenDeHoja(req, res));
 
 // ── Retiro en sucursal: lo que el cliente pasa a buscar y no sale en el camión ──
 // 🪤 `/resumen` va antes que `/:comprobanteId`, o Express lo toma como un id.

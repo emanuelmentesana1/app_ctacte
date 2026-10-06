@@ -1,0 +1,20 @@
+/* La hoja con los recibos y el resumen del cierre (Mati, 06/10/2026). El papel es el de ImprimirHoja.css
+   (mismas reglas de impresión: nada pintado, láser negra); acá va sólo lo propio. */
+
+/* Cada recibo es un renglón debajo de su cliente, más chico y corrido a la derecha. */
+.hrd-recibo td { font-size: 0.92em; padding-left: 1.4rem !important; color: #3d3020; }
+
+.hrd-pie { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.8rem; margin-top: 0.9rem; align-items: start; }
+.hrd-cuentas { font-size: 0.8rem; }
+.hrd-cuentas .hrd-fuerte td { font-weight: 700; }
+
+.hrd-cierre .hrd-titulo { display: inline-flex; align-items: center; gap: 0.4rem; color: #F9EFE3; font-weight: 700; }
+.hrd-cierre .hrd-cancelar { background: transparent; color: #F9EFE3; border: 1px solid rgba(249, 239, 227, 0.6); }
+.hrd-cierre .hrd-confirmar { margin-left: 0; }
+.hrd-aviso { max-width: 1100px; margin: 0.8rem auto 0; padding: 0 1.4rem; color: #6b5a45; font-size: 0.85rem; }
+
+@media print {
+    .hrd-recibo td { font-size: 8.5pt !important; }
+    .hrd-pie { display: block; }
+    .hrd-cuentas { margin-top: 2mm; page-break-inside: avoid; break-inside: avoid; }
+}
