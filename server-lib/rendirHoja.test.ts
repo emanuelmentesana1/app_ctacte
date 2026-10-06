@@ -283,3 +283,24 @@ describe('piloto (Mati, 05/10/2026: "sí al piloto" con una hoja)', () => {
   });
 });
 
+
+describe('elegir la factura (Mati, 06/10/2026)', () => {
+  it('🔑 la elección se guarda, vuelve en la respuesta y el recibo se emite a esas facturas', async () => {
+    process.env.RENDICION_PILOTO_HOJAS = '3449';
+    const g = await guardar(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA2', importe: 412_300 }] }] });
+    expect(g.statusCode).toBe(200);
+    expect(g.body.rendicion.efectivo).toEqual([{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA2', importe: 412_300 }] }]);
+    const r = res();
+    await emitirRendicion(req(ANTO, { accion: 'emitir' }), r);
+    expect(r.statusCode).toBe(200);
+    expect(m.aprobar.mock.calls[0][0].body.comprobantes.map((c: any) => [c.id, c.importe_a_pagar])).toEqual([['FA2', 412_300]]);
+  });
+
+  it('cambiar sólo la factura elegida no borra el control de lo contado (la plata es la misma)', async () => {
+    await guardar(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300 }], efectivo_contado: 412_300 });
+    Object.assign(m.tablas.rendiciones[0], { controlado_por: 'u-maca', controlado_at: '2026-10-06T12:00:00Z' });
+    const g = await guardar(ANTO, { efectivo: [{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA2', importe: 412_300 }] }], efectivo_contado: 412_300, version: 1 });
+    expect(g.statusCode).toBe(200);
+    expect(m.tablas.rendiciones[0].controlado_por).toBe('u-maca');
+  });
+});

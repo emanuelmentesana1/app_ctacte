@@ -100,8 +100,12 @@ async function recibosDeLaHoja(hojaId: string): Promise<ReciboDeLaHoja[]> {
         .eq('tenant_id', TENANT_ID).eq('hoja_id', hojaId).eq('medio_pago', 'efectivo'), 'No pude leer los recibos de la hoja');
     return (filas ?? []).map(f => ({ ...f, cod_cliente: Number(f.cod_cliente), monto: Number(f.monto) }));
 }
+/** Lo que cuenta para el control de lo contado: cliente e importe (la factura elegida no cambia la plata). */
+const plata = (l: LineaEfectivo) => [l.cod_cliente, l.importe];
 const aBorrador = (r: FilaRendicion): Borrador => ({
-    efectivo: (r.efectivo ?? []).map(l => ({ cod_cliente: Number(l.cod_cliente), importe: Number(l.importe) })),
+    efectivo: (r.efectivo ?? []).map(l => (l.facturas?.length
+        ? { cod_cliente: Number(l.cod_cliente), importe: Number(l.importe), facturas: l.facturas.map(f => ({ id: String(f.id), importe: Number(f.importe) })) }
+        : { cod_cliente: Number(l.cod_cliente), importe: Number(l.importe) })),
     gastos: (r.gastos ?? []).map(g => ({ concepto: g.concepto, importe: Number(g.importe), detalle: g.detalle ?? null })),
     efectivo_contado: r.efectivo_contado == null ? null : Number(r.efectivo_contado),
     observaciones: r.observaciones ?? null,
@@ -173,7 +177,7 @@ export async function guardarRendicion(req: Request & { user?: JwtPayload }, res
         const antes = actual ? aBorrador(actual) : null;
         const cambioContado = (antes?.efectivo_contado ?? null) !== b.efectivo_contado;
         const cambioCuenta = !antes || cambioContado
-            || JSON.stringify(antes.efectivo) !== JSON.stringify(b.efectivo) || JSON.stringify(antes.gastos) !== JSON.stringify(b.gastos);
+            || JSON.stringify(antes.efectivo.map(plata)) !== JSON.stringify(b.efectivo.map(plata)) || JSON.stringify(antes.gastos) !== JSON.stringify(b.gastos);
         const fila: Record<string, unknown> = {
             efectivo: b.efectivo, gastos: b.gastos, efectivo_contado: b.efectivo_contado, observaciones: b.observaciones,
             diferencia: cuentasDeLaRendicion(b).diferencia, updated_by: user.sub,

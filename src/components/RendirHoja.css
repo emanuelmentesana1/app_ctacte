@@ -63,3 +63,10 @@
     .rr-fila > span:not(.rr-cliente)::before { content: attr(data-l); color: var(--color-text-muted); font-size: 0.74rem; text-align: left; }
     .rr-input { max-width: 7.5rem; }
 }
+
+/* Elegir a qué facturas va el recibo (Mati, 06/10/2026). */
+.rr-elegir { padding: 0.15rem 0.6rem; }
+.rr-elegir-facturas { flex-basis: 100%; display: flex; flex-direction: column; gap: 0.35rem; padding: 0.4rem 0 0.2rem 0.8rem; border-left: 3px solid var(--color-border); }
+.rr-factura { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+.rr-suma { color: #8a5a00; font-weight: 600; }
+.rr-suma.ok { color: #06652F; }

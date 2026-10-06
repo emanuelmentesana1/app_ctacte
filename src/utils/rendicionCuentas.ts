@@ -7,7 +7,12 @@
 export const CONCEPTOS_GASTO = ['Ayudante', 'Combustible', 'Comida', 'Estacionamiento', 'Gomería', 'Otro'] as const;
 export type ConceptoGasto = typeof CONCEPTOS_GASTO[number];
 
-export interface LineaEfectivo { cod_cliente: number; importe: number }
+export interface LineaEfectivo {
+    cod_cliente: number;
+    importe: number;
+    /** A qué facturas va el recibo, si quien rinde la eligió (Mati, 06/10/2026). Sin esto: la más vieja primero. */
+    facturas?: Array<{ id: string; importe: number }>;
+}
 export interface GastoViaje { concepto: ConceptoGasto; importe: number; detalle: string | null }
 export interface Borrador {
     efectivo: LineaEfectivo[];

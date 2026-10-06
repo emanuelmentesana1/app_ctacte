@@ -37,7 +37,13 @@ interface Detalle { ok: true; falta_migracion?: boolean; mensaje?: string; rendi
 interface Paso {
     cod_cliente: number; importe: number; estado: 'emitido' | 'listo' | 'salteado' | 'en_espera'; motivo?: string;
     comprobantes?: { id: string; importe_a_pagar: number; etiqueta?: string; fecha?: string | null }[]; recibo_im?: string | null;
+    /** true = va a las facturas que eligió quien rinde; false = la más vieja primero. */
+    elegida?: boolean;
+    pendientes?: { id: string; etiqueta: string; fecha: string | null; saldo: number }[];
 }
+type Eleccion = Array<{ id: string; importe: number }>;
+/** Hasta $5 lo absorbe el ajuste de IM (igual que el servidor). */
+const TOLERANCIA = 5;
 interface Resultado { cod_cliente: number; ok: boolean; recibo_id?: string | null; error?: string }
 interface GastoEnPantalla { concepto: ConceptoGasto; importe: string; detalle: string }
 
@@ -52,6 +58,9 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
     const [error, setError] = useState<string | null>(null);
     const [listo, setListo] = useState<string | null>(null);
     const [efectivo, setEfectivo] = useState<Record<number, string>>({});
+    /** A qué facturas va el recibo de cada cliente, si quien rinde la eligió (Mati, 06/10/2026). */
+    const [elegidas, setElegidas] = useState<Record<number, Eleccion>>({});
+    const [eligiendo, setEligiendo] = useState<number | null>(null);
     const [gastos, setGastos] = useState<GastoEnPantalla[]>([]);
     const [contado, setContado] = useState('');
     const [ocupado, setOcupado] = useState(false);
@@ -63,6 +72,7 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
         setDetalle(d);
         const r = d.rendicion;
         setEfectivo(Object.fromEntries((r?.efectivo ?? []).map(l => [l.cod_cliente, aTexto(l.importe)])));
+        setElegidas(Object.fromEntries((r?.efectivo ?? []).filter(l => l.facturas?.length).map(l => [l.cod_cliente, l.facturas as Eleccion])));
         setGastos((r?.gastos ?? []).map(g => ({ concepto: g.concepto, importe: aTexto(g.importe), detalle: g.detalle ?? '' })));
         setContado(aTexto(r?.efectivo_contado));
     }, []);
@@ -98,8 +108,10 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
 
     const lineas: LineaEfectivo[] = useMemo(() => h.filas.flatMap(f => {
         const importe = fijo(f)?.importe ?? leerImporte(efectivo[f.cod_cliente] ?? '') ?? 0;
-        return importe > 0 ? [{ cod_cliente: f.cod_cliente, importe }] : [];
-    }), [h.filas, efectivo, fijo]);
+        const facturas = elegidas[f.cod_cliente];
+        if (!(importe > 0)) return [];
+        return [facturas?.length ? { cod_cliente: f.cod_cliente, importe, facturas } : { cod_cliente: f.cod_cliente, importe }];
+    }), [h.filas, efectivo, elegidas, fijo]);
     const gastosLeidos: GastoViaje[] = gastos.map(g => ({ concepto: g.concepto, importe: leerImporte(g.importe) ?? 0, detalle: g.detalle.trim() || null }));
     const contadoLeido = contado.trim() === '' ? null : leerImporte(contado);
     const cuentas = cuentasDeLaRendicion({ efectivo: lineas, gastos: gastosLeidos, efectivo_contado: contadoLeido });
@@ -186,7 +198,12 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
                                 {fj ? <b>{money(fj.importe)}</b> : (
                                     <input className="rr-input" inputMode="decimal" placeholder="0" aria-label={`Efectivo cobrado a ${f.cliente}`}
                                         value={efectivo[f.cod_cliente] ?? ''} disabled={ocupado}
-                                        onChange={e => { const v = e.target.value; setEfectivo(x => ({ ...x, [f.cod_cliente]: v })); }} />
+                                        onChange={e => {
+                                            const v = e.target.value;
+                                            setEfectivo(x => ({ ...x, [f.cod_cliente]: v }));
+                                            // Otro importe: la elección de facturas ya no suma lo cobrado.
+                                            setElegidas(x => { const y = { ...x }; delete y[f.cod_cliente]; return y; });
+                                        }} />
                                 )}
                             </span>
                             <span data-l="Recibo" className="rr-recibo">
@@ -282,10 +299,19 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
                         <div key={p.cod_cliente} className={`rr-paso ${p.estado}`}>
                             <span className="rr-paso-cliente">{nombre(p.cod_cliente)} · {money(p.importe)}</span>
                             <span>
-                                {p.estado === 'listo' && `→ ${(p.comprobantes ?? []).map(c => `${c.etiqueta || c.id}${c.fecha ? ` del ${ddmm(c.fecha)}` : ''} ${money(c.importe_a_pagar)}`).join(' · ')}`}
+                                {p.estado === 'listo' && `→ ${(p.comprobantes ?? []).map(c => `${c.etiqueta || c.id}${c.fecha ? ` del ${ddmm(c.fecha)}` : ''} ${money(c.importe_a_pagar)}`).join(' · ')}${p.elegida ? ' (elegidas)' : ''}`}
                                 {p.estado === 'emitido' && `✓ ya emitido (recibo ${p.recibo_im ?? ''})`}
                                 {(p.estado === 'salteado' || p.estado === 'en_espera') && p.motivo}
                             </span>
+                            {p.estado !== 'emitido' && !!p.pendientes?.length && eligiendo !== p.cod_cliente && (
+                                <button type="button" className="rd-btn ghost rr-elegir" disabled={ocupado} onClick={() => setEligiendo(p.cod_cliente)}>Elegir facturas</button>
+                            )}
+                            {eligiendo === p.cod_cliente && (
+                                <ElegirFacturas paso={p} actual={elegidas[p.cod_cliente]}
+                                    onUsar={fs => { setElegidas(x => ({ ...x, [p.cod_cliente]: fs })); setEligiendo(null); }}
+                                    onMasVieja={() => { setElegidas(x => { const y = { ...x }; delete y[p.cod_cliente]; return y; }); setEligiendo(null); }}
+                                    onCancelar={() => setEligiendo(null)} />
+                            )}
                         </div>
                     ))}
                 </div>
@@ -305,3 +331,42 @@ export function RendirHoja({ h, onGuardado }: { h: HojaParaRendir; onGuardado: (
         </div>
     );
 }
+
+/**
+ * Elegir a qué facturas va el recibo de un cliente: arranca con lo que propone la vista previa (la más
+ * vieja primero) y se puede cambiar o repartir. La suma tiene que dar lo cobrado (±$5). Lo elegido se
+ * guarda con la rendición y el servidor lo vuelve a controlar contra IM antes de emitir.
+ */
+function ElegirFacturas({ paso, actual, onUsar, onMasVieja, onCancelar }: {
+    paso: Paso; actual: Eleccion | undefined; onUsar: (fs: Eleccion) => void; onMasVieja: () => void; onCancelar: () => void;
+}) {
+    const inicial = actual ?? (paso.comprobantes ?? []).map(c => ({ id: c.id, importe: c.importe_a_pagar }));
+    const [montos, setMontos] = useState<Record<string, string>>(() => Object.fromEntries(inicial.map(f => [f.id, aTexto(f.importe)])));
+    const eleccion: Eleccion = (paso.pendientes ?? []).flatMap(f => {
+        const imp = leerImporte(montos[f.id] ?? '') ?? 0;
+        return imp > 0 ? [{ id: f.id, importe: imp }] : [];
+    });
+    const suma = eleccion.reduce((s, f) => s + f.importe, 0);
+    const pasada = (paso.pendientes ?? []).find(f => (leerImporte(montos[f.id] ?? '') ?? 0) > f.saldo + 1);
+    const sirve = eleccion.length > 0 && Math.abs(suma - paso.importe) <= TOLERANCIA && !pasada;
+    return (
+        <div className="rr-elegir-facturas">
+            {(paso.pendientes ?? []).map(f => (
+                <label key={f.id} className="rr-factura">
+                    <span>{f.etiqueta}{f.fecha ? ` del ${ddmm(f.fecha)}` : ''} · le quedan {money(f.saldo)}</span>
+                    <input className="rr-input" inputMode="decimal" placeholder="0" aria-label={`Importe a ${f.etiqueta}`} value={montos[f.id] ?? ''}
+                        onChange={e => { const v = e.target.value; setMontos(m => ({ ...m, [f.id]: v })); }} />
+                </label>
+            ))}
+            <span className={`rr-suma ${sirve ? 'ok' : ''}`}>
+                Suma {money(suma)} de {money(paso.importe)}{pasada ? ` · a ${pasada.etiqueta} no le alcanza el saldo` : ''}
+            </span>
+            <div className="rr-acciones">
+                <button type="button" className="rd-btn rr-usar" disabled={!sirve} onClick={() => onUsar(eleccion)}>Usar estas</button>
+                <button type="button" className="rd-btn ghost" onClick={onMasVieja}>La más vieja primero</button>
+                <button type="button" className="rd-btn ghost" onClick={onCancelar}>Cancelar</button>
+            </div>
+        </div>
+    );
+}
+

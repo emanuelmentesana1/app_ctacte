@@ -50,7 +50,9 @@ export function normalizarBorrador(body: unknown, clientesDeLaHoja: number[]): {
         vistos.add(cod);
         if (importe == null || importe === 0) continue;
         if (!(importe > 0) || importe > MAX_IMPORTE) return { ok: false, error: `El efectivo del cliente ${cod} no es un importe válido.` };
-        efectivo.push({ cod_cliente: cod, importe: centavos(importe) });
+        const facturas = facturasElegidas((l as Record<string, unknown>)?.facturas, cod, centavos(importe));
+        if (typeof facturas === 'string') return { ok: false, error: facturas };
+        efectivo.push(facturas ? { cod_cliente: cod, importe: centavos(importe), facturas } : { cod_cliente: cod, importe: centavos(importe) });
     }
 
     const gastos: GastoViaje[] = [];
@@ -74,6 +76,26 @@ export function normalizarBorrador(body: unknown, clientesDeLaHoja: number[]): {
     return { ok: true, borrador: { efectivo, gastos, efectivo_contado: contado == null ? null : centavos(contado), observaciones } };
 }
 
+/**
+ * La elección de facturas de una línea (Mati, 06/10/2026: "se tiene que poder ELEGIR a qué factura se
+ * imputa"). Sin elección: undefined (va la más vieja primero). Mal armada: el texto del error.
+ */
+function facturasElegidas(raw: unknown, cod: number, importe: number): Array<{ id: string; importe: number }> | undefined | string {
+    if (raw == null || (Array.isArray(raw) && !raw.length)) return undefined;
+    if (!Array.isArray(raw) || raw.length > 30) return `Las facturas elegidas para el cliente ${cod} no son válidas.`;
+    const out: Array<{ id: string; importe: number }> = [];
+    for (const f of raw) {
+        const id = String((f as Record<string, unknown>)?.id ?? '').trim();
+        const imp = numero((f as Record<string, unknown>)?.importe);
+        if (!id || id.length > 30 || imp == null || !(imp > 0)) return `Las facturas elegidas para el cliente ${cod} no son válidas.`;
+        if (out.some(x => x.id === id)) return `La factura ${id} está dos veces en el cliente ${cod}.`;
+        out.push({ id, importe: centavos(imp) });
+    }
+    const suma = centavos(out.reduce((s, x) => s + x.importe, 0));
+    if (Math.abs(suma - importe) > TOLERANCIA_FIFO) return `Las facturas elegidas para el cliente ${cod} suman $${suma.toFixed(2)} y lo cobrado es $${importe.toFixed(2)}.`;
+    return out;
+}
+
 /** Un recibo de efectivo que la app ya creó para esta hoja (`comprobantes_pago.hoja_id`). */
 export interface ReciboDeLaHoja { id: string; cod_cliente: number; monto: number; status: string; infomanager_recibo_id: string | null; error_msg?: string | null }
 
@@ -88,6 +110,10 @@ export interface PasoEmision {
     /** El registro de la app que se reusa (un intento anterior que falló). */
     recibo_app_id?: string | null;
     recibo_im?: string | null;
+    /** true = imputa a las facturas que eligió quien rinde; false = la más vieja primero. */
+    elegida?: boolean;
+    /** Las facturas pendientes del cliente (la más vieja primero), para poder elegir en la vista previa. */
+    pendientes?: Array<{ id: string; etiqueta: string; fecha: string | null; saldo: number }>;
 }
 
 /** Hasta $5 lo absorbe el ajuste de IM (trunca a entero), igual que la pantalla de aprobación. */
@@ -148,20 +174,38 @@ export function planDeEmision(e: EntradaPlan): PasoEmision[] {
 
         const pendientes = e.pendientesDe(l.cod_cliente);
         if (pendientes == null) return salteado('IM no devolvió las facturas pendientes del cliente: probá en unos minutos.');
-        const elegidas = preseleccionFIFO(pendientes, l.importe);
-        const imputado = Object.values(elegidas).reduce((s, x) => s + x, 0);
-        if (Math.abs(imputado - l.importe) > TOLERANCIA_FIFO) {
-            return salteado(`Paga más que toda su deuda pendiente ($${centavos(imputado).toFixed(2)}): el resto es anticipo y la API de IM no lo hace. Cargalo a mano en IM.`);
+        // Como la ve Anto en Cobranzas: "FA 3-142847".
+        const etiqueta = (f: FacturaParaImputar | undefined, id: string) =>
+            [f?.tipo_comprobante, f?.punto_de_venta != null ? `${f.punto_de_venta}-${f.numero}` : String(f?.numero ?? id)].filter(Boolean).join(' ');
+        const deuda = pendientes.filter(f => Number(f.saldo ?? f.importe_factura ?? 0) > 0)
+            .map(f => ({ id: String(f.id), etiqueta: etiqueta(f, String(f.id)), fecha: f.fecha_factura ?? null, saldo: centavos(Number(f.saldo ?? f.importe_factura ?? 0)) }))
+            .sort((a, b) => (a.fecha ?? '9999') < (b.fecha ?? '9999') ? -1 : (a.fecha ?? '9999') > (b.fecha ?? '9999') ? 1 : 0);
+        const conPendientes = { pendientes: deuda, elegida: !!l.facturas };
+
+        let elegidas: Array<[string, number]>;
+        if (l.facturas) {
+            // 🔴 Lo elegido se controla contra IM ahora: si otro recibo pagó esa factura, no se emite.
+            const mal = l.facturas.find(f => { const p = deuda.find(d => d.id === f.id); return !p || f.importe > p.saldo + 1; });
+            if (mal) {
+                const p = deuda.find(d => d.id === mal.id);
+                return salteado(p ? `A la factura ${p.etiqueta} le quedan $${p.saldo.toFixed(2)} y elegiste $${mal.importe.toFixed(2)}: elegí de nuevo.`
+                    : `La factura ${mal.id} que elegiste ya no está pendiente en IM: elegí de nuevo.`, conPendientes);
+            }
+            elegidas = l.facturas.map(f => [f.id, f.importe]);
+        } else {
+            elegidas = Object.entries(preseleccionFIFO(pendientes, l.importe));
+            const imputado = elegidas.reduce((s, [, x]) => s + x, 0);
+            if (Math.abs(imputado - l.importe) > TOLERANCIA_FIFO) {
+                return salteado(`Paga más que toda su deuda pendiente ($${centavos(imputado).toFixed(2)}): el resto es anticipo y la API de IM no lo hace. Cargalo a mano en IM.`, conPendientes);
+            }
         }
-        if (listos >= e.tope) return { ...base, estado: 'en_espera', motivo: `Tope del piloto: ${e.tope} por tanda.`, recibo_app_id: previo?.id ?? null };
+        if (listos >= e.tope) return { ...base, estado: 'en_espera', motivo: `Tope del piloto: ${e.tope} por tanda.`, recibo_app_id: previo?.id ?? null, ...conPendientes };
         listos += 1;
         return {
-            ...base, estado: 'listo', recibo_app_id: previo?.id ?? null,
-            comprobantes: Object.entries(elegidas).map(([id, importe_a_pagar]) => {
+            ...base, estado: 'listo', recibo_app_id: previo?.id ?? null, ...conPendientes,
+            comprobantes: elegidas.map(([id, importe_a_pagar]) => {
                 const f = pendientes.find(x => String(x.id) === id);
-                // Como la ve Anto en Cobranzas: "FA 3-142847".
-                const numero = f?.punto_de_venta != null ? `${f.punto_de_venta}-${f.numero}` : String(f?.numero ?? id);
-                return { id, importe_a_pagar, etiqueta: [f?.tipo_comprobante, numero].filter(Boolean).join(' '), fecha: f?.fecha_factura ?? null };
+                return { id, importe_a_pagar, etiqueta: etiqueta(f, id), fecha: f?.fecha_factura ?? null };
             }),
         };
     });

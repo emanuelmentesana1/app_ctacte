@@ -215,3 +215,54 @@ describe('resumenParaIM — lo que Anto copia en IM (la API no crea asientos ni 
         expect(r.faltan_contar).toEqual([3449]);
     });
 });
+
+/**
+ * Mati (06/10/2026, durante el piloto de la 3449): al rendir se tiene que poder ELEGIR a qué factura se
+ * imputa cada recibo. La vista previa propone de la más vieja a la más nueva y se puede cambiar o
+ * repartir; la suma tiene que dar lo cobrado (±$5) y la elección se guarda con la rendición.
+ */
+describe('elegir la factura de cada recibo', () => {
+    const plan = (efectivo: Array<{ cod_cliente: number; importe: number; facturas?: Array<{ id: string; importe: number }> }>, pendientes = [fa('FA2', '2026-10-05', 412_300), fa('FA1', '2026-09-20', 120_000)]) => planDeEmision({
+        hoja: HOJA, efectivo, existentes: [], enIM: [], enApp: [], pendientesDe: () => pendientes, cuentaCaja: CAJA, tope: 20,
+    });
+
+    it('🔑 la elección se guarda con la línea, si suma lo cobrado (±$5)', () => {
+        const r = normalizarBorrador({ efectivo: [{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA2', importe: 412_300 }] }] }, [722]);
+        expect(r.ok && r.borrador.efectivo[0].facturas).toEqual([{ id: 'FA2', importe: 412_300 }]);
+    });
+
+    it('🔴 si la elección no suma lo cobrado, o repite una factura, no se guarda', () => {
+        const noSuma = normalizarBorrador({ efectivo: [{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA2', importe: 400_000 }] }] }, [722]);
+        expect(noSuma.ok).toBe(false);
+        if (!noSuma.ok) expect(noSuma.error).toMatch(/722/);
+        const repetida = normalizarBorrador({ efectivo: [{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA2', importe: 200_000 }, { id: 'FA2', importe: 212_300 }] }] }, [722]);
+        expect(repetida.ok).toBe(false);
+    });
+
+    it('🔑 sin elección, la vista previa propone la más vieja y trae las pendientes para poder cambiar', () => {
+        const [p] = plan([{ cod_cliente: 722, importe: 412_300 }]);
+        expect(p.elegida).toBe(false);
+        expect(p.pendientes?.map(f => [f.id, f.saldo])).toEqual([['FA1', 120_000], ['FA2', 412_300]]);
+    });
+
+    it('🔑 con elección, se imputa a lo elegido (aunque no sea la más vieja)', () => {
+        const [p] = plan([{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA2', importe: 412_300 }] }]);
+        expect(p.estado).toBe('listo');
+        expect(p.elegida).toBe(true);
+        expect(p.comprobantes?.map(c => [c.id, c.importe_a_pagar])).toEqual([['FA2', 412_300]]);
+    });
+
+    it('repartir entre varias facturas', () => {
+        const [p] = plan([{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA2', importe: 312_300 }, { id: 'FA1', importe: 100_000 }] }]);
+        expect(p.comprobantes?.map(c => [c.id, c.importe_a_pagar])).toEqual([['FA2', 312_300], ['FA1', 100_000]]);
+    });
+
+    it('🔴 si una factura elegida ya no está pendiente, o no le alcanza el saldo, ese cliente no se emite', () => {
+        const [yaNo] = plan([{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA9', importe: 412_300 }] }]);
+        expect(yaNo.estado).toBe('salteado');
+        expect(yaNo.motivo).toMatch(/FA9/);
+        const [noAlcanza] = plan([{ cod_cliente: 722, importe: 412_300, facturas: [{ id: 'FA1', importe: 412_300 }] }]);
+        expect(noAlcanza.estado).toBe('salteado');
+        expect(noAlcanza.pendientes?.length).toBe(2);   // igual se muestran, para elegir de nuevo
+    });
+});

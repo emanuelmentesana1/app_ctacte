@@ -38,7 +38,8 @@ const conRendicion = (p = {}) => ({
 const plan = {
   ok: true, tope: 0, fecha: '2026-10-05', cuenta: '1110009', consultado: { im: true },
   plan: [
-    { cod_cliente: 101, importe: 412_300, estado: 'listo', comprobantes: [{ id: 'FA1', importe_a_pagar: 120_000 }, { id: 'FA2', importe_a_pagar: 292_300 }] },
+    { cod_cliente: 101, importe: 412_300, estado: 'listo', elegida: false, comprobantes: [{ id: 'FA1', importe_a_pagar: 120_000 }, { id: 'FA2', importe_a_pagar: 292_300 }],
+      pendientes: [{ id: 'FA1', etiqueta: 'FA 777-1', fecha: '2026-09-20', saldo: 120_000 }, { id: 'FA2', etiqueta: 'FA 777-2', fecha: '2026-10-05', saldo: 412_300 }] },
     { cod_cliente: 102, importe: 50_000, estado: 'salteado', motivo: 'Ya está cargado a mano en IM (recibo 0000-30155777, $50000.00): no se emite de nuevo.', recibo_im: '58990777' },
   ],
 };
@@ -143,6 +144,27 @@ try {
       await abrirRendir(page);
       assert(/3448/.test(await page.locator('.rr-emision-apagada').getAttribute('title') ?? ''), 'El ⓘ no dice qué hoja está en el piloto');
       assert(await page.locator('.rr-root .rd-aviso').count() === 0, 'Fuera del piloto no tiene que aparecer el aviso de "no cargues en IM"');
+    } finally { await ctx.close(); }
+  });
+
+  await test('Rendir: en la vista previa se elige a qué factura va el recibo y se guarda con la rendición', async () => {
+    const { page, ctx, pedidos } = await abrir(1440, { detalle: conRendicion() });
+    try {
+      await abrirRendir(page);
+      await page.locator('button.rr-vista').click();
+      await page.locator('.rr-paso', { hasText: 'CLIENTE ALFA' }).locator('button.rr-elegir').click();
+      const editor = page.locator('.rr-elegir-facturas');
+      // Arranca con lo propuesto: la más vieja primero.
+      assert(await editor.locator('input[aria-label="Importe a FA 777-1"]').inputValue() === '120000', 'No arrancó con la propuesta');
+      await editor.locator('input[aria-label="Importe a FA 777-1"]').fill('0');
+      assert(await editor.locator('button.rr-usar').isDisabled(), 'Deja usar una elección que no suma lo cobrado');
+      await editor.locator('input[aria-label="Importe a FA 777-2"]').fill('412300');
+      await editor.locator('button.rr-usar').click();
+      await page.locator('button.rr-guardar').click();
+      await page.locator('.aviso-temporal').waitFor();
+      const put = pedidos.filter(p => p.metodo === 'PUT').at(-1);
+      const alfa = put?.cuerpo.efectivo.find(l => l.cod_cliente === 101);
+      assert(JSON.stringify(alfa?.facturas) === JSON.stringify([{ id: 'FA2', importe: 412_300 }]), `No guardó la elección: ${JSON.stringify(alfa)}`);
     } finally { await ctx.close(); }
   });
 
